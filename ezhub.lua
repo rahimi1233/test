@@ -1,5 +1,5 @@
--- ez_hub_v3_merged.lua
--- EZ HUB v3 — Full merge: Aim, ESP, FOV Circle, Color Picker, No Recoil, FPS Booster
+-- ez_hub_v4_permanent.lua
+-- EZ HUB v4 — Permanent key emy210208
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,31 +22,36 @@ local function safe(name, fn, ...)
     return ok
 end
 
-log("Drawing=" .. tostring(hasDrawing) .. " hookfn=" .. tostring(hasHookFn))
+-- ================= KEY SYSTEM (VERSI 1 — PERMANENT) =================
+local VALID_KEYS = {
+    ["emy210208"] = true,
+}
+
+local function isKeyValid(key)
+    return VALID_KEYS[key] == true
+end
+
+log("Key system ready. Key: emy210208")
+log("Drawing=" .. tostring(hasDrawing))
 
 -- ================= CONFIG =================
 local Config = {
-    -- Aim
     AimEnabled = false, AimSmoothness = 8, AimFOV = 150,
     AimMaxDist = 500, AimPart = "Head", AimTeamCheck = true,
     AimWallCheck = false, AimHumanize = true,
     NoRecoilEnabled = false,
-    -- ESP
     ESPEnabled = false, ESPBox = true, ESPName = true,
     ESPDistance = true, ESPHealth = true, ESPTeamCheck = true,
-    -- FOV Visuals
+    ESPLines = true, ESPLinesRainbow = false,
     FOVCircleEnabled = true,
     FOVCircleColor = Color3.fromRGB(255, 50, 50),
     LockIndicatorEnabled = true,
     LockIndicatorColor = Color3.fromRGB(100, 255, 100),
-    -- FPS
     FPSBoostEnabled = false,
     FPSBoostShadows = false,
     FPSBoostTextures = false,
     FPSBoostParticles = false,
 }
-
-local VALID_KEYS = {"EZ-2024", "OLIVIA", "TATER"}
 
 -- ================= SHADOW BYPASS =================
 local bypass_active = false
@@ -142,6 +147,11 @@ local function getESPData(plr)
     return hum, root, head
 end
 
+local function rainbowColor(offset)
+    local t = tick() * 1.5 + (offset or 0)
+    return Color3.fromHSV((t % 3) / 3, 1, 1)
+end
+
 local function updateESP()
     if not hasDrawing then return end
     if not Config.ESPEnabled then
@@ -149,6 +159,8 @@ local function updateESP()
         return
     end
     local activeNames = {}
+    local myPos = Camera.CFrame.Position
+    local screenCenter = Camera.ViewportSize / 2
     for _, plr in ipairs(Players:GetPlayers()) do
         local hum, root, head = getESPData(plr)
         if hum and root and head then
@@ -164,15 +176,18 @@ local function updateESP()
                 if Config.ESPName then tbl.name = createDrawing("Text", {Size = 14, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255)}) end
                 if Config.ESPDistance then tbl.dist = createDrawing("Text", {Size = 12, Center = true, Outline = true, Color = Color3.fromRGB(200, 200, 200)}) end
                 if Config.ESPHealth then tbl.hpBar = createDrawing(espSquareClass, {Thickness = 2, Color = Color3.fromRGB(0, 255, 0), Filled = true}) end
+                if Config.ESPLines then tbl.line = createDrawing("Line", {Thickness = 1, Color = Color3.fromRGB(255, 50, 50), From = screenCenter, To = screenCenter, Visible = true}) end
             end
             local headPos = Camera:WorldToViewportPoint(head.Position)
             local rootPos = Camera:WorldToViewportPoint(root.Position)
             if headPos.Z > 0 and rootPos.Z > 0 then
                 local height = math.abs(headPos.Y - rootPos.Y)
                 local width = height / 2
+                local lineColor = Config.ESPLinesRainbow and rainbowColor(headPos.X / 100) or Color3.fromRGB(255, 50, 50)
                 if tbl.box then
                     tbl.box.Size = Vector2.new(width, height)
                     tbl.box.Position = Vector2.new(headPos.X - width / 2, headPos.Y)
+                    tbl.box.Color = lineColor
                     tbl.box.Visible = true
                 end
                 if tbl.boxOutline then
@@ -187,7 +202,7 @@ local function updateESP()
                 end
                 if tbl.dist then
                     tbl.dist.Position = Vector2.new(headPos.X, headPos.Y + height + 4)
-                    tbl.dist.Text = math.floor((root.Position - Camera.CFrame.Position).Magnitude) .. "m"
+                    tbl.dist.Text = math.floor((root.Position - myPos).Magnitude) .. "m"
                     tbl.dist.Visible = true
                 end
                 if tbl.hpBar then
@@ -196,6 +211,12 @@ local function updateESP()
                     tbl.hpBar.Size = Vector2.new(3, barH)
                     tbl.hpBar.Position = Vector2.new(headPos.X - width / 2 - 6, headPos.Y + (height - barH))
                     tbl.hpBar.Visible = true
+                end
+                if tbl.line then
+                    tbl.line.From = Vector2.new(screenCenter.X, Camera.ViewportSize.Y)
+                    tbl.line.To = Vector2.new(headPos.X, headPos.Y + height / 2)
+                    tbl.line.Color = lineColor
+                    tbl.line.Visible = Config.ESPLines
                 end
             else
                 for _, d in pairs(tbl) do if d then d.Visible = false end end
@@ -223,7 +244,16 @@ local function getClosestTarget()
             if hum and root and hum.Health > 0 then
                 if Config.AimTeamCheck and plr.Team == LocalPlayer.Team then continue end
                 if (root.Position - camPos).Magnitude > Config.AimMaxDist then continue end
-                local part = plr.Character:FindFirstChild(Config.AimPart) or root
+                local part
+                if Config.AimPart == "Head" then
+                    part = plr.Character:FindFirstChild("Head")
+                elseif Config.AimPart == "Body" then
+                    part = plr.Character:FindFirstChild("UpperTorso") or plr.Character:FindFirstChild("Torso") or root
+                elseif Config.AimPart == "Legs" then
+                    part = plr.Character:FindFirstChild("LeftUpperLeg") or plr.Character:FindFirstChild("RightUpperLeg") or plr.Character:FindFirstChild("LeftLeg") or plr.Character:FindFirstChild("RightLeg") or root
+                else
+                    part = plr.Character:FindFirstChild(Config.AimPart) or root
+                end
                 if part then
                     local screen, onScreen = Camera:WorldToViewportPoint(part.Position)
                     if onScreen then
@@ -251,28 +281,32 @@ local function humanizeTarget(targetPos)
     return targetPos + Vector3.new(math.sin(t * 3.1) * 0.15, math.cos(t * 2.7) * 0.15, math.sin(t * 4.3) * 0.1)
 end
 
--- ================= NO RECOIL =================
+-- ================= NO RECOIL (HARD LOCK LURUS) =================
 local recoilConnection = nil
+local lockedPitch = nil
+
 local function enableNoRecoil()
     if recoilConnection then return end
+    local cam = workspace.CurrentCamera
+    if cam then
+        local rx = cam.CFrame:ToEulerAnglesYXZ()
+        lockedPitch = rx
+    end
     recoilConnection = RunService.RenderStepped:Connect(function()
         if not Config.NoRecoilEnabled then return end
-        local currentCam = workspace.CurrentCamera
-        if currentCam then
-            local old = currentCam.CFrame
-            local x, y, z = old:ToEulerAnglesXYZ()
-            local fixed = CFrame.new(old.Position) * CFrame.Angles(x, y, 0)
-            currentCam.CFrame = fixed
-        end
+        local c = workspace.CurrentCamera
+        if not c then return end
+        local rx, ry, rz = c.CFrame:ToEulerAnglesYXZ()
+        local newPitch = rx + ((lockedPitch or rx) - rx) * 0.9
+        local newRoll = rz + (0 - rz) * 0.95
+        c.CFrame = CFrame.new(c.CFrame.Position) * CFrame.fromEulerAnglesYXZ(newPitch, ry, newRoll)
     end)
-    log("No Recoil ON")
+    log("No Recoil HARD LOCK ON")
 end
 
 local function disableNoRecoil()
-    if recoilConnection then
-        recoilConnection:Disconnect()
-        recoilConnection = nil
-    end
+    if recoilConnection then recoilConnection:Disconnect(); recoilConnection = nil end
+    lockedPitch = nil
     log("No Recoil OFF")
 end
 
@@ -285,12 +319,10 @@ local function boostFPS()
     originalSettings.OutdoorAmbient = Lighting.OutdoorAmbient
     originalSettings.GlobalShadows = Lighting.GlobalShadows
     originalSettings.Brightness = Lighting.Brightness
-
     Lighting.Ambient = Color3.fromRGB(255, 255, 255)
     Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
     Lighting.GlobalShadows = false
     Lighting.Brightness = 1
-
     if Config.FPSBoostShadows then
         for _, obj in ipairs(Lighting:GetChildren()) do
             if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") then
@@ -342,19 +374,19 @@ local buildMain
 
 local function buildUI()
     local parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
-    local old = parent:FindFirstChild("EZ_HUB_V3")
+    local old = parent:FindFirstChild("EZ_HUB_V4")
     if old then old:Destroy() end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "EZ_HUB_V3"
+    gui.Name = "EZ_HUB_V4"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 999
     gui.Parent = parent
 
     local keyFrame = Instance.new("Frame")
-    keyFrame.Size = UDim2.new(0, 280, 0, 180)
-    keyFrame.Position = UDim2.new(0.5, -140, 0.5, -90)
+    keyFrame.Size = UDim2.new(0, 300, 0, 190)
+    keyFrame.Position = UDim2.new(0.5, -150, 0.5, -95)
     keyFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
     keyFrame.BorderSizePixel = 0
     keyFrame.Parent = gui
@@ -363,18 +395,18 @@ local function buildUI()
     local kTitle = Instance.new("TextLabel")
     kTitle.Size = UDim2.new(1, 0, 0, 40)
     kTitle.BackgroundTransparency = 1
-    kTitle.Text = "🔑 Enter Key"
+    kTitle.Text = "🔑 EZ HUB — Enter Key"
     kTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
     kTitle.Font = Enum.Font.GothamBold
     kTitle.TextSize = 16
     kTitle.Parent = keyFrame
 
     local kBox = Instance.new("TextBox")
-    kBox.Size = UDim2.new(0, 220, 0, 35)
+    kBox.Size = UDim2.new(0, 240, 0, 35)
     kBox.Position = UDim2.new(0, 30, 0, 55)
     kBox.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
     kBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-    kBox.PlaceholderText = "EZ-2024"
+    kBox.PlaceholderText = "emy210208"
     kBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 120)
     kBox.Font = Enum.Font.Gotham
     kBox.TextSize = 13
@@ -393,8 +425,8 @@ local function buildUI()
     kErr.Parent = keyFrame
 
     local kBtn = Instance.new("TextButton")
-    kBtn.Size = UDim2.new(0, 220, 0, 35)
-    kBtn.Position = UDim2.new(0, 30, 0, 125)
+    kBtn.Size = UDim2.new(0, 240, 0, 35)
+    kBtn.Position = UDim2.new(0, 30, 0, 120)
     kBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     kBtn.Text = "VERIFY"
     kBtn.TextColor3 = Color3.new(1, 1, 1)
@@ -404,13 +436,11 @@ local function buildUI()
     local kbc2 = Instance.new("UICorner"); kbc2.CornerRadius = UDim.new(0, 8); kbc2.Parent = kBtn
 
     kBtn.MouseButton1Click:Connect(function()
-        local ok = false
-        for _, k in ipairs(VALID_KEYS) do if kBox.Text == k then ok = true break end end
-        if ok then
+        if isKeyValid(kBox.Text) then
             safe("destroy-key", function() keyFrame:Destroy() end)
             safe("build-main", buildMain)
         else
-            kErr.Text = "Invalid key, try again."
+            kErr.Text = "Invalid key."
             kBox.Text = ""
         end
     end)
@@ -418,8 +448,8 @@ end
 
 function buildMain()
     main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 340, 0, 460)
-    main.Position = UDim2.new(0, 80, 0.5, -230)
+    main.Size = UDim2.new(0, 360, 0, 500)
+    main.Position = UDim2.new(0, 80, 0.5, -250)
     main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     main.BorderSizePixel = 0
     main.Active = true
@@ -452,10 +482,10 @@ function buildMain()
     title.Size = UDim2.new(1, -90, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "EZ HUB v3"
+    title.Text = "EZ HUB v4 — emy210208"
     title.TextColor3 = Color3.fromRGB(220, 50, 50)
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 15
+    title.TextSize = 14
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = titleBar
 
@@ -487,11 +517,11 @@ function buildMain()
     minBtn.MouseButton1Click:Connect(function()
         minimized = not minimized
         if minimized then
-            TweenService:Create(main, sizeTweenInfo, {Size = UDim2.new(0, 340, 0, 38)}):Play()
+            TweenService:Create(main, sizeTweenInfo, {Size = UDim2.new(0, 360, 0, 38)}):Play()
             tabsContainer.Visible = false
             contentContainer.Visible = false
         else
-            TweenService:Create(main, sizeTweenInfo, {Size = UDim2.new(0, 340, 0, 460)}):Play()
+            TweenService:Create(main, sizeTweenInfo, {Size = UDim2.new(0, 360, 0, 500)}):Play()
             tabsContainer.Visible = true
             contentContainer.Visible = true
         end
@@ -546,7 +576,7 @@ function buildMain()
         s.BackgroundTransparency = 1
         s.BorderSizePixel = 0
         s.ScrollBarThickness = 4
-        s.CanvasSize = UDim2.new(0, 0, 0, 600)
+        s.CanvasSize = UDim2.new(0, 0, 0, 700)
         s.Visible = false
         s.Parent = contentContainer
         return s
@@ -644,8 +674,8 @@ function buildMain()
         local curY = yPos + 18
         for i = 1, 3 do
             local box = Instance.new("TextBox")
-            box.Size = UDim2.new(0, 50, 0, 24)
-            box.Position = UDim2.new(0, 5 + (i - 1) * 55, 0, curY)
+            box.Size = UDim2.new(0, 60, 0, 24)
+            box.Position = UDim2.new(0, 5 + (i - 1) * 65, 0, curY)
             box.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
             box.Text = tostring(math.floor(vals[i]))
             box.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -663,16 +693,54 @@ function buildMain()
         end
     end
 
+    local function makeSelector(parent, text, yPos, options, initial, cb)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -10, 0, 15)
+        lbl.Position = UDim2.new(0, 5, 0, yPos)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = text .. ": " .. initial
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 11
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = parent
+
+        local curY = yPos + 18
+        local btns = {}
+        local width = (1 / #options)
+        for i, opt in ipairs(options) do
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(width, -4, 0, 26)
+            b.Position = UDim2.new(width * (i - 1), 2, 0, curY)
+            b.BackgroundColor3 = (opt == initial) and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(40, 40, 52)
+            b.Text = opt
+            b.TextColor3 = Color3.new(1, 1, 1)
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 11
+            b.Parent = parent
+            local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 6); bc.Parent = b
+            btns[opt] = b
+            b.MouseButton1Click:Connect(function()
+                for o, btn in pairs(btns) do
+                    btn.BackgroundColor3 = (o == opt) and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(40, 40, 52)
+                end
+                lbl.Text = text .. ": " .. opt
+                cb(opt)
+            end)
+        end
+    end
+
     -- AIM TAB
     local yAim = 5
     makeToggle(aimScroll, "Aim Assist", yAim, Config.AimEnabled, function(v) Config.AimEnabled = v end); yAim = yAim + 38
+    makeSelector(aimScroll, "Aim Part", yAim, {"Head", "Body", "Legs"}, Config.AimPart, function(v) Config.AimPart = v end); yAim = yAim + 48
     makeSlider(aimScroll, "Smoothness", yAim, 1, 20, Config.AimSmoothness, function(v) Config.AimSmoothness = v end); yAim = yAim + 42
     makeSlider(aimScroll, "FOV", yAim, 10, 400, Config.AimFOV, function(v) Config.AimFOV = v end); yAim = yAim + 42
     makeSlider(aimScroll, "Max Distance", yAim, 50, 1000, Config.AimMaxDist, function(v) Config.AimMaxDist = v end); yAim = yAim + 42
     makeToggle(aimScroll, "Humanize Aim", yAim, Config.AimHumanize, function(v) Config.AimHumanize = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Wall Check", yAim, Config.AimWallCheck, function(v) Config.AimWallCheck = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 38
-    makeToggle(aimScroll, "No Recoil", yAim, Config.NoRecoilEnabled, function(v)
+    makeToggle(aimScroll, "No Recoil (Lurus)", yAim, Config.NoRecoilEnabled, function(v)
         Config.NoRecoilEnabled = v
         if v then enableNoRecoil() else disableNoRecoil() end
     end); yAim = yAim + 38
@@ -680,7 +748,7 @@ function buildMain()
         Config.FOVCircleEnabled = v
         if FOVCircle then FOVCircle.Visible = v end
     end); yAim = yAim + 38
-    makeColorPicker(aimScroll, "FOV Circle Color (R,G,B)", yAim, Config.FOVCircleColor, function(c)
+    makeColorPicker(aimScroll, "FOV Color", yAim, Config.FOVCircleColor, function(c)
         Config.FOVCircleColor = c
         if FOVCircle then FOVCircle.Color = c end
     end); yAim = yAim + 48
@@ -688,7 +756,7 @@ function buildMain()
         Config.LockIndicatorEnabled = v
         if not v and LockIndicator then LockIndicator.Visible = false end
     end); yAim = yAim + 38
-    makeColorPicker(aimScroll, "Lock Indicator Color (R,G,B)", yAim, Config.LockIndicatorColor, function(c)
+    makeColorPicker(aimScroll, "Lock Color", yAim, Config.LockIndicatorColor, function(c)
         Config.LockIndicatorColor = c
         if LockIndicator then LockIndicator.Color = c end
     end); yAim = yAim + 52
@@ -698,6 +766,8 @@ function buildMain()
     local yEsp = 5
     makeToggle(espScroll, "ESP", yEsp, Config.ESPEnabled, function(v) Config.ESPEnabled = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Box", yEsp, Config.ESPBox, function(v) Config.ESPBox = v end); yEsp = yEsp + 38
+    makeToggle(espScroll, "ESP Lines", yEsp, Config.ESPLines, function(v) Config.ESPLines = v end); yEsp = yEsp + 38
+    makeToggle(espScroll, "Lines Rainbow", yEsp, Config.ESPLinesRainbow, function(v) Config.ESPLinesRainbow = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Name", yEsp, Config.ESPName, function(v) Config.ESPName = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Distance", yEsp, Config.ESPDistance, function(v) Config.ESPDistance = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Health", yEsp, Config.ESPHealth, function(v) Config.ESPHealth = v end); yEsp = yEsp + 38
@@ -778,4 +848,4 @@ task.spawn(function()
 end)
 
 safe("build-ui", buildUI)
-log("EZ HUB v3 loaded.")
+log("EZ HUB v4 loaded. Key: emy210208 (permanent)")
