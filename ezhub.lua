@@ -1,5 +1,5 @@
--- ez_hub_v2.lua
--- EZ HUB v2 — Modern Dark, Mobile, Tabs, Key, Minimize, Humanized Aim
+-- ez_hub_v2_fov.lua
+-- EZ HUB v2 — Added FOV Circle & Lock Indicator with Color Picker
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -21,6 +21,12 @@ local Config = {
     AimWallCheck = false, AimHumanize = true,
     ESPEnabled = false, ESPBox = true, ESPName = true,
     ESPDistance = true, ESPHealth = true, ESPTeamCheck = true,
+    
+    -- NEW: FOV Circle Settings
+    FOVCircleEnabled = true,
+    FOVCircleColor = Color3.fromRGB(255, 50, 50),
+    LockIndicatorEnabled = true,
+    LockIndicatorColor = Color3.fromRGB(100, 255, 100),
 }
 
 local VALID_KEYS = {"EZ-2024", "OLIVIA", "TATER"}
@@ -55,8 +61,11 @@ local function init_bypass()
 end
 init_bypass()
 
--- ================= DRAWING (ESP) =================
+-- ================= DRAWINGS (ESP & FOV) =================
 local Drawings = {}
+local FOVCircle = nil
+local LockIndicator = nil
+
 local function createDrawing(class, props)
     if not Drawing then return nil end
     local d = Drawing.new(class)
@@ -71,6 +80,37 @@ local function clearESP()
     Drawings = {}
 end
 
+-- NEW: Create FOV Circle
+local function initFOVCircle()
+    if not Drawing then return end
+    if FOVCircle then FOVCircle:Remove() end
+    FOVCircle = createDrawing("Circle", {
+        Color = Config.FOVCircleColor,
+        Thickness = 1.5,
+        Filled = false,
+        NumSides = 64,
+        Visible = Config.FOVCircleEnabled
+    })
+end
+
+-- NEW: Create Lock Indicator (center dot when aim finds target)
+local function initLockIndicator()
+    if not Drawing then return end
+    if LockIndicator then LockIndicator:Remove() end
+    LockIndicator = createDrawing("Circle", {
+        Color = Config.LockIndicatorColor,
+        Thickness = 2,
+        Filled = false,
+        NumSides = 32,
+        Radius = 6,
+        Visible = false
+    })
+end
+
+initFOVCircle()
+initLockIndicator()
+
+-- ================= ESP UPDATE =================
 local function getESPData(plr)
     if plr == LocalPlayer or not plr.Character then return nil end
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
@@ -148,7 +188,7 @@ local function updateESP()
     end
 end
 
--- ================= AIM (Humanized) =================
+-- ================= AIM =================
 local aimNoiseSeed = os.clock()
 local function getClosestTarget()
     local closest, dist = nil, math.huge
@@ -184,19 +224,13 @@ local function getClosestTarget()
 end
 
 local function humanizeTarget(targetPos)
-    -- Small offset that follows a sine wave to mimic human micro-movement
     if not Config.AimHumanize then return targetPos end
     local t = (os.clock() - aimNoiseSeed)
-    local offset = Vector3.new(
-        math.sin(t * 3.1) * 0.15,
-        math.cos(t * 2.7) * 0.15,
-        math.sin(t * 4.3) * 0.1
-    )
-    return targetPos + offset
+    return targetPos + Vector3.new(math.sin(t * 3.1) * 0.15, math.cos(t * 2.7) * 0.15, math.sin(t * 4.3) * 0.1)
 end
 
 -- ================= UI =================
-local gui, main, tabsContainer, contentContainer, minimizeBtn
+local gui, main, tabsContainer, contentContainer
 local tabs = {}
 local currentTab = "AIM"
 
@@ -291,13 +325,12 @@ function buildMain()
 
     -- ==== DRAG (supports touch) ====
     local dragStart, startPos
-    local function onDragStart(input)
+    main.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragStart = input.Position
             startPos = main.Position
         end
-    end
-    main.InputBegan:Connect(onDragStart)
+    end)
     UserInputService.InputChanged:Connect(function(input)
         if dragStart and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
@@ -316,13 +349,6 @@ function buildMain()
     titleBar.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
     titleBar.Parent = main
     local tbc = Instance.new("UICorner"); tbc.CornerRadius = UDim.new(0, 12); tbc.Parent = titleBar
-    -- fix bottom corners flat
-    local tbfix = Instance.new("Frame")
-    tbfix.Size = UDim2.new(1, 0, 0, 12)
-    tbfix.Position = UDim2.new(0, 0, 0, 26)
-    tbfix.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-    tbfix.BorderSizePixel = 0
-    tbfix.Parent = titleBar
 
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, -90, 1, 0)
@@ -513,6 +539,46 @@ function buildMain()
         end)
     end
 
+    -- NEW: Color Picker for FOV / Lock
+    local function makeColorPicker(parent, text, yPos, initialColor, cb)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -10, 0, 15)
+        lbl.Position = UDim2.new(0, 5, 0, yPos)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = text
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 11
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = parent
+
+        local rBox, gBox, bBox
+        local colors = {"R", "G", "B"}
+        local vals = {initialColor.R * 255, initialColor.G * 255, initialColor.B * 255}
+        local curY = yPos + 18
+        
+        for i = 1, 3 do
+            local box = Instance.new("TextBox")
+            box.Size = UDim2.new(0, 50, 0, 24)
+            box.Position = UDim2.new(0, 5 + (i - 1) * 55, 0, curY)
+            box.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+            box.Text = tostring(math.floor(vals[i]))
+            box.TextColor3 = Color3.fromRGB(255, 255, 255)
+            box.Font = Enum.Font.Gotham
+            box.TextSize = 12
+            box.Parent = parent
+            local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = box
+            
+            box.FocusLost:Connect(function()
+                local n = tonumber(box.Text) or 0
+                n = math.clamp(n, 0, 255)
+                box.Text = tostring(math.floor(n))
+                vals[i] = n
+                cb(Color3.fromRGB(vals[1], vals[2], vals[3]))
+            end)
+        end
+    end
+
     local yAim = 5
     makeToggle(aimScroll, "Aim Assist", yAim, Config.AimEnabled, function(v) Config.AimEnabled = v end); yAim = yAim + 38
     makeSlider(aimScroll, "Smoothness", yAim, 1, 20, Config.AimSmoothness, function(v) Config.AimSmoothness = v end); yAim = yAim + 42
@@ -521,6 +587,25 @@ function buildMain()
     makeToggle(aimScroll, "Humanize Aim", yAim, Config.AimHumanize, function(v) Config.AimHumanize = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Wall Check", yAim, Config.AimWallCheck, function(v) Config.AimWallCheck = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 42
+    
+    -- NEW: FOV Circle settings in AIM tab
+    makeToggle(aimScroll, "FOV Circle", yAim, Config.FOVCircleEnabled, function(v) 
+        Config.FOVCircleEnabled = v 
+        if FOVCircle then FOVCircle.Visible = v end
+    end); yAim = yAim + 38
+    makeColorPicker(aimScroll, "FOV Circle Color", yAim, Config.FOVCircleColor, function(c) 
+        Config.FOVCircleColor = c 
+        if FOVCircle then FOVCircle.Color = c end
+    end); yAim = yAim + 48
+    
+    makeToggle(aimScroll, "Lock Indicator", yAim, Config.LockIndicatorEnabled, function(v) 
+        Config.LockIndicatorEnabled = v 
+        if not v and LockIndicator then LockIndicator.Visible = false end
+    end); yAim = yAim + 38
+    makeColorPicker(aimScroll, "Lock Indicator Color", yAim, Config.LockIndicatorColor, function(c) 
+        Config.LockIndicatorColor = c 
+        if LockIndicator then LockIndicator.Color = c end
+    end); yAim = yAim + 52
     aimScroll.CanvasSize = UDim2.new(0, 0, 0, yAim)
 
     local yEsp = 5
@@ -543,27 +628,29 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
--- Snappier aim: lerp faster, optionally humanize
 RunService.RenderStepped:Connect(function()
+    -- Update FOV Circle Position
+    if FOVCircle then
+        local center = Camera.ViewportSize / 2
+        FOVCircle.Position = center
+        FOVCircle.Radius = Config.AimFOV
+        FOVCircle.Visible = Config.FOVCircleEnabled
+    end
+
+    local target = nil
     if Config.AimEnabled then
-        local target = getClosestTarget()
+        target = getClosestTarget()
         if target then
             local targetPos = humanizeTarget(target.Position)
             local desired = CFrame.new(Camera.CFrame.Position, targetPos)
-            -- Snappier than before: use 1.8 multiplier
             local alpha = math.clamp(1 / (Config.AimSmoothness / 1.8), 0, 1)
             Camera.CFrame = Camera.CFrame:Lerp(desired, alpha)
         end
     end
-    safe(updateESP)
-end)
 
--- Auto re-apply bypass
-task.spawn(function()
-    while task.wait(10) do
-        if bypass_active then safe(init_bypass) end
+    -- Update Lock Indicator (glow when target locked)
+    if LockIndicator then
+        local center = Camera.ViewportSize / 2
+        LockIndicator.Position = center
+        LockIndicator.Visible = Config.LockIndicatorEnabled and target ~= nil
     end
-end)
-
--- Start
-safe(buildUI)
