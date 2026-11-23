@@ -1,5 +1,5 @@
--- ez_hub_v5_no_fps.lua
--- EZ HUB v5 — No FPS module. Key emy210208 permanent.
+-- ez_hub_v6_urban.lua
+-- EZ HUB v6 — Urban Reload auto-lock no recoil, key emy210208
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,14 +22,8 @@ local function safe(name, fn, ...)
 end
 
 -- ================= KEY SYSTEM =================
-local VALID_KEYS = {
-    ["emy210208"] = true,
-}
-
-local function isKeyValid(key)
-    return VALID_KEYS[key] == true
-end
-
+local VALID_KEYS = { ["emy210208"] = true }
+local function isKeyValid(key) return VALID_KEYS[key] == true end
 log("Key system ready. Key: emy210208")
 log("Drawing=" .. tostring(hasDrawing))
 
@@ -276,32 +270,49 @@ local function humanizeTarget(targetPos)
     return targetPos + Vector3.new(math.sin(t * 3.1) * 0.15, math.cos(t * 2.7) * 0.15, math.sin(t * 4.3) * 0.1)
 end
 
--- ================= NO RECOIL =================
+-- ================= NO RECOIL (URBAN AUTO-LOCK) =================
 local recoilConnection = nil
-local lockedPitch = nil
+local fireConn1 = nil
+local fireConn2 = nil
+local lockedCF = nil
+local mouseHeld = false
 
 local function enableNoRecoil()
     if recoilConnection then return end
-    local cam = workspace.CurrentCamera
-    if cam then
-        local rx = cam.CFrame:ToEulerAnglesYXZ()
-        lockedPitch = rx
-    end
+    fireConn1 = UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if not Config.NoRecoilEnabled then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            mouseHeld = true
+            lockedCF = workspace.CurrentCamera.CFrame
+        end
+    end)
+    fireConn2 = UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            mouseHeld = false
+            task.delay(0.08, function() lockedCF = nil end)
+        end
+    end)
     recoilConnection = RunService.RenderStepped:Connect(function()
         if not Config.NoRecoilEnabled then return end
-        local c = workspace.CurrentCamera
-        if not c then return end
-        local rx, ry, rz = c.CFrame:ToEulerAnglesYXZ()
-        local newPitch = rx + ((lockedPitch or rx) - rx) * 0.9
-        local newRoll = rz + (0 - rz) * 0.95
-        c.CFrame = CFrame.new(c.CFrame.Position) * CFrame.fromEulerAnglesYXZ(newPitch, ry, newRoll)
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        if mouseHeld and lockedCF then
+            cam.CFrame = lockedCF
+        else
+            local rx, ry, rz = cam.CFrame:ToEulerAnglesYXZ()
+            cam.CFrame = CFrame.new(cam.CFrame.Position) * CFrame.fromEulerAnglesYXZ(rx * 0.6, ry, rz * 0.4)
+        end
     end)
-    log("No Recoil HARD LOCK ON")
+    log("No Recoil URBAN AUTO-LOCK ON")
 end
 
 local function disableNoRecoil()
     if recoilConnection then recoilConnection:Disconnect(); recoilConnection = nil end
-    lockedPitch = nil
+    if fireConn1 then fireConn1:Disconnect(); fireConn1 = nil end
+    if fireConn2 then fireConn2:Disconnect(); fireConn2 = nil end
+    mouseHeld = false
+    lockedCF = nil
     log("No Recoil OFF")
 end
 
@@ -312,11 +323,11 @@ local buildMain
 
 local function buildUI()
     local parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
-    local old = parent:FindFirstChild("EZ_HUB_V5")
+    local old = parent:FindFirstChild("EZ_HUB_V6")
     if old then old:Destroy() end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "EZ_HUB_V5"
+    gui.Name = "EZ_HUB_V6"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 999
@@ -420,7 +431,7 @@ function buildMain()
     title.Size = UDim2.new(1, -90, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "EZ HUB v5 — emy210208"
+    title.Text = "EZ HUB v6 — emy210208"
     title.TextColor3 = Color3.fromRGB(220, 50, 50)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 14
@@ -677,7 +688,7 @@ function buildMain()
     makeToggle(aimScroll, "Humanize Aim", yAim, Config.AimHumanize, function(v) Config.AimHumanize = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Wall Check", yAim, Config.AimWallCheck, function(v) Config.AimWallCheck = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 38
-    makeToggle(aimScroll, "No Recoil (Lurus)", yAim, Config.NoRecoilEnabled, function(v)
+    makeToggle(aimScroll, "No Recoil (Urban)", yAim, Config.NoRecoilEnabled, function(v)
         Config.NoRecoilEnabled = v
         if v then enableNoRecoil() else disableNoRecoil() end
     end); yAim = yAim + 38
@@ -765,4 +776,4 @@ task.spawn(function()
 end)
 
 safe("build-ui", buildUI)
-log("EZ HUB v5 loaded. Key: emy210208")
+log("EZ HUB v6 loaded. Key: emy210208")
