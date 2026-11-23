@@ -630,4 +630,43 @@ safe("init-lock", initLockIndicator)
 
 RunService.RenderStepped:Connect(function()
     if FOVCircle then
-        local ok,
+        local ok, err = pcall(function()
+            FOVCircle.Position = Camera.ViewportSize / 2
+            FOVCircle.Radius = Config.AimFOV
+            FOVCircle.Visible = Config.FOVCircleEnabled
+            FOVCircle.Color = Config.FOVCircleColor
+        end)
+        if not ok then warn_("FOV update: " .. tostring(err)) end
+    end
+
+    local target = nil
+    if Config.AimEnabled then
+        target = getClosestTarget()
+        if target then
+            local targetPos = humanizeTarget(target.Position)
+            local desired = CFrame.new(Camera.CFrame.Position, targetPos)
+            local alpha = math.clamp(1 / (Config.AimSmoothness / 1.8), 0, 1)
+            Camera.CFrame = Camera.CFrame:Lerp(desired, alpha)
+        end
+    end
+
+    if LockIndicator then
+        local ok, err = pcall(function()
+            LockIndicator.Position = Camera.ViewportSize / 2
+            LockIndicator.Visible = Config.LockIndicatorEnabled and target ~= nil
+            LockIndicator.Color = Config.LockIndicatorColor
+        end)
+        if not ok then warn_("Lock update: " .. tostring(err)) end
+    end
+
+    safe("esp", updateESP)
+end)
+
+task.spawn(function()
+    while task.wait(10) do
+        if bypass_active then safe("re-bypass", init_bypass) end
+    end
+end)
+
+safe("build-ui", buildUI)
+log("EZ HUB v2 loaded.")
