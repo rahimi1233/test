@@ -18,13 +18,11 @@ local state = {
 	noRecoil = false,
 	smoothness = 0.25,
 	fovRadius = 150,
+	showFov = true,
 	aimKey = Enum.UserInputType.MouseButton2,
 	aiming = false,
+	touchAimBtn = nil,
 }
-
--- Connections.
-local espConnections = {}
-local highlightMap = {}
 
 -- Drawing helpers.
 local function newDrawing(class, props)
@@ -280,20 +278,20 @@ local function createSlider(parent, text, min, max, default, callback)
 	end
 
 	bar.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			update(input.Position.X)
 		end
 	end)
 
 	userInputService.InputChanged:Connect(function(input)
-		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			update(input.Position.X)
 		end
 	end)
 
 	userInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
 		end
 	end)
@@ -312,6 +310,7 @@ createToggle(espPage, "Highlight", false, function(v) state.highlight = v end)
 -- Aimbot page.
 createToggle(aimPage, "Aimbot Enabled", false, function(v) state.aimbot = v end)
 createToggle(aimPage, "No Recoil", false, function(v) state.noRecoil = v end)
+createToggle(aimPage, "Show FOV Circle", true, function(v) state.showFov = v end)
 createSlider(aimPage, "Smoothness", 0.05, 1, 0.25, function(v) state.smoothness = v end)
 createSlider(aimPage, "FOV Radius", 50, 500, 150, function(v) state.fovRadius = v end)
 
@@ -356,14 +355,67 @@ keyBtn.MouseButton1Click:Connect(function()
 	keyBtn.Text = "Press key..."
 end)
 
--- Close button.
-closeBtn.MouseButton1Click:Connect(function()
-	screenGui:Destroy()
-	for _, conn in pairs(espConnections) do pcall(function() conn:Disconnect() end) end
-	for _, h in pairs(highlightMap) do pcall(function() h:Destroy() end) end
+-- Mobile aim button.
+local touchBtn = Instance.new("TextButton")
+touchBtn.Size = UDim2.fromOffset(80, 80)
+touchBtn.Position = UDim2.new(1, -110, 1, -160)
+touchBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 160)
+touchBtn.BackgroundTransparency = 0.35
+touchBtn.Text = "AIM"
+touchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+touchBtn.Font = Enum.Font.GothamBold
+touchBtn.TextSize = 16
+touchBtn.Active = true
+touchBtn.Draggable = true
+touchBtn.Parent = screenGui
+
+local touchBtnCorner = Instance.new("UICorner")
+touchBtnCorner.CornerRadius = UDim.new(0, 40)
+touchBtnCorner.Parent = touchBtn
+
+local touchStroke = Instance.new("UIStroke")
+touchStroke.Color = Color3.fromRGB(255, 255, 255)
+touchStroke.Thickness = 2
+touchStroke.Transparency = 0.5
+touchStroke.Parent = touchBtn
+
+touchBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		state.aiming = true
+		touchBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+	end
 end)
 
--- Input handling.
+touchBtn.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		state.aiming = false
+		touchBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 160)
+	end
+end)
+
+touchBtn.TouchLongPress:Connect(function() end)
+
+-- FOV circle drawing.
+local fovCircle = newDrawing("Circle", {
+	Thickness = 1,
+	Color = Color3.fromRGB(255, 255, 255),
+	Transparency = 0.6,
+	Visible = false,
+	Filled = false,
+	NumSides = 64,
+})
+
+-- Close.
+closeBtn.MouseButton1Click:Connect(function()
+	screenGui:Destroy()
+	for player, objs in pairs(espObjects) do
+		for _, o in pairs(objs) do pcall(function() o:Remove() end) end
+	end
+	for _, h in pairs(highlightMap) do pcall(function() h:Destroy() end) end
+	pcall(function() fovCircle:Remove() end)
+end)
+
+-- Input.
 userInputService.InputBegan:Connect(function(input, gameProcessed)
 	if waitingForBind and not gameProcessed then
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 then
@@ -380,19 +432,20 @@ userInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 	if gameProcessed then return end
-	if input.UserInputType == state.aimKey or input.KeyCode == state.aimKey then
+	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
 		state.aiming = true
 	end
 end)
 
 userInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == state.aimKey or input.KeyCode == state.aimKey then
+	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
 		state.aiming = false
 	end
 end)
 
--- ESP objects per player.
+-- ESP objects.
 local espObjects = {}
+local highlightMap = {}
 
 local function createESP(player)
 	local objs = {
@@ -418,7 +471,6 @@ local function removeESP(player)
 	end
 end
 
--- Highlight per player.
 local function updateHighlight(player)
 	if not state.highlight or player == localPlayer then
 		if highlightMap[player] then
@@ -439,7 +491,6 @@ local function updateHighlight(player)
 	highlightMap[player] = hl
 end
 
--- Setup ESP for all players.
 for _, player in ipairs(playersService:GetPlayers()) do
 	createESP(player)
 end
@@ -449,6 +500,16 @@ playersService.PlayerRemoving:Connect(removeESP)
 
 -- Render loop.
 runService.RenderStepped:Connect(function()
+	-- FOV circle.
+	if state.aimbot and state.showFov then
+		local mouse = userInputService:GetMouseLocation()
+		fovCircle.Position = Vector2.new(mouse.X, mouse.Y + 36)
+		fovCircle.Radius = state.fovRadius
+		fovCircle.Visible = true
+	else
+		fovCircle.Visible = false
+	end
+
 	-- Aimbot.
 	if state.aimbot and state.aiming then
 		local closest, closestDist = nil, math.huge
@@ -474,12 +535,11 @@ runService.RenderStepped:Connect(function()
 		end
 	end
 
-	-- No Recoil (simplified: cancels camera recoil by resetting pitch drift).
+	-- No Recoil placeholder.
 	if state.noRecoil then
 		local char = localPlayer.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		if hrp then
-			-- Hooked recoil would go here; this is a placeholder for camera reset.
 		end
 	end
 
@@ -519,7 +579,6 @@ runService.RenderStepped:Connect(function()
 		local width = height * 0.5
 		local boxPos = Vector2.new(screenPos.X - width / 2, screenHead.Y)
 
-		-- Tracer.
 		if state.tracers then
 			local bottom = Vector2.new(currentCamera.ViewportSize.X / 2, currentCamera.ViewportSize.Y)
 			objs.tracer.From = bottom
@@ -529,7 +588,6 @@ runService.RenderStepped:Connect(function()
 			objs.tracer.Visible = false
 		end
 
-		-- Box.
 		if state.boxes then
 			objs.box.Size = Vector2.new(width, height)
 			objs.box.Position = boxPos
@@ -538,7 +596,6 @@ runService.RenderStepped:Connect(function()
 			objs.box.Visible = false
 		end
 
-		-- Name.
 		if state.names then
 			objs.name.Text = player.Name
 			objs.name.Position = Vector2.new(screenPos.X, screenHead.Y - 16)
@@ -547,7 +604,6 @@ runService.RenderStepped:Connect(function()
 			objs.name.Visible = false
 		end
 
-		-- Health.
 		if state.health then
 			local hp = humanoid.Health / humanoid.MaxHealth
 			local barH = height
