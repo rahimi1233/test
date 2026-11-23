@@ -1,5 +1,5 @@
--- ez_hub_v2_full.lua
--- EZ HUB v2 — Complete, untruncated, FOV circle + color picker
+-- ez_hub_v3_merged.lua
+-- EZ HUB v3 — Full merge: Aim, ESP, FOV Circle, Color Picker, No Recoil, FPS Booster
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -7,6 +7,7 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
 
 local hasDrawing = (typeof(Drawing) == "table" and typeof(Drawing.new) == "function")
 local hasHookFn = (typeof(hookfunction) == "function")
@@ -25,15 +26,24 @@ log("Drawing=" .. tostring(hasDrawing) .. " hookfn=" .. tostring(hasHookFn))
 
 -- ================= CONFIG =================
 local Config = {
+    -- Aim
     AimEnabled = false, AimSmoothness = 8, AimFOV = 150,
     AimMaxDist = 500, AimPart = "Head", AimTeamCheck = true,
     AimWallCheck = false, AimHumanize = true,
+    NoRecoilEnabled = false,
+    -- ESP
     ESPEnabled = false, ESPBox = true, ESPName = true,
     ESPDistance = true, ESPHealth = true, ESPTeamCheck = true,
+    -- FOV Visuals
     FOVCircleEnabled = true,
     FOVCircleColor = Color3.fromRGB(255, 50, 50),
     LockIndicatorEnabled = true,
     LockIndicatorColor = Color3.fromRGB(100, 255, 100),
+    -- FPS
+    FPSBoostEnabled = false,
+    FPSBoostShadows = false,
+    FPSBoostTextures = false,
+    FPSBoostParticles = false,
 }
 
 local VALID_KEYS = {"EZ-2024", "OLIVIA", "TATER"}
@@ -102,7 +112,6 @@ local function initFOVCircle()
         NumSides = 64, Visible = Config.FOVCircleEnabled,
         Radius = Config.AimFOV, Position = Camera.ViewportSize / 2,
     })
-    log("FOV circle: " .. tostring(FOVCircle ~= nil))
 end
 
 local function initLockIndicator()
@@ -113,7 +122,6 @@ local function initLockIndicator()
         NumSides = 32, Radius = 6, Visible = false,
         Position = Camera.ViewportSize / 2,
     })
-    log("Lock indicator: " .. tostring(LockIndicator ~= nil))
 end
 
 local function clearESP()
@@ -243,6 +251,90 @@ local function humanizeTarget(targetPos)
     return targetPos + Vector3.new(math.sin(t * 3.1) * 0.15, math.cos(t * 2.7) * 0.15, math.sin(t * 4.3) * 0.1)
 end
 
+-- ================= NO RECOIL =================
+local recoilConnection = nil
+local function enableNoRecoil()
+    if recoilConnection then return end
+    recoilConnection = RunService.RenderStepped:Connect(function()
+        if not Config.NoRecoilEnabled then return end
+        local currentCam = workspace.CurrentCamera
+        if currentCam then
+            local old = currentCam.CFrame
+            local x, y, z = old:ToEulerAnglesXYZ()
+            local fixed = CFrame.new(old.Position) * CFrame.Angles(x, y, 0)
+            currentCam.CFrame = fixed
+        end
+    end)
+    log("No Recoil ON")
+end
+
+local function disableNoRecoil()
+    if recoilConnection then
+        recoilConnection:Disconnect()
+        recoilConnection = nil
+    end
+    log("No Recoil OFF")
+end
+
+-- ================= FPS BOOSTER =================
+local originalSettings = {Ambient=nil, OutdoorAmbient=nil, GlobalShadows=nil, Brightness=nil}
+local savedObjects = {}
+
+local function boostFPS()
+    originalSettings.Ambient = Lighting.Ambient
+    originalSettings.OutdoorAmbient = Lighting.OutdoorAmbient
+    originalSettings.GlobalShadows = Lighting.GlobalShadows
+    originalSettings.Brightness = Lighting.Brightness
+
+    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 1
+
+    if Config.FPSBoostShadows then
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") then
+                obj.Enabled = false
+                table.insert(savedObjects, {obj, "effect"})
+            end
+        end
+    end
+    if Config.FPSBoostParticles then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") then
+                obj.Enabled = false
+                table.insert(savedObjects, {obj, "particle"})
+            end
+        end
+    end
+    if Config.FPSBoostTextures then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+                table.insert(savedObjects, {obj, "texture"})
+            end
+        end
+    end
+    log("FPS Boost applied")
+end
+
+local function disableFPSBoost()
+    Lighting.Ambient = originalSettings.Ambient or Color3.fromRGB(0, 0, 0)
+    Lighting.OutdoorAmbient = originalSettings.OutdoorAmbient or Color3.fromRGB(128, 128, 128)
+    Lighting.GlobalShadows = originalSettings.GlobalShadows ~= false
+    Lighting.Brightness = originalSettings.Brightness or 2
+    for _, entry in ipairs(savedObjects) do
+        local obj, kind = entry[1], entry[2]
+        if obj and obj.Parent then
+            if kind == "effect" then obj.Enabled = true
+            elseif kind == "particle" then obj.Enabled = true
+            elseif kind == "texture" then obj.Transparency = 0 end
+        end
+    end
+    savedObjects = {}
+    log("FPS Boost disabled")
+end
+
 -- ================= UI =================
 local gui, main, tabsContainer, contentContainer
 local tabs = {}
@@ -250,16 +342,15 @@ local buildMain
 
 local function buildUI()
     local parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
-    local old = parent:FindFirstChild("EZ_HUB_V2")
+    local old = parent:FindFirstChild("EZ_HUB_V3")
     if old then old:Destroy() end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "EZ_HUB_V2"
+    gui.Name = "EZ_HUB_V3"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 999
     gui.Parent = parent
-    log("GUI created")
 
     local keyFrame = Instance.new("Frame")
     keyFrame.Size = UDim2.new(0, 280, 0, 180)
@@ -334,7 +425,6 @@ function buildMain()
     main.Active = true
     main.Parent = gui
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = main
-    log("Main frame built")
 
     local dragStart, startPos
     main.InputBegan:Connect(function(input)
@@ -349,9 +439,7 @@ function buildMain()
         end
     end)
     UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragStart = nil
-        end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragStart = nil end
     end)
 
     local titleBar = Instance.new("Frame")
@@ -364,7 +452,7 @@ function buildMain()
     title.Size = UDim2.new(1, -90, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "EZ HUB v2"
+    title.Text = "EZ HUB v3"
     title.TextColor3 = Color3.fromRGB(220, 50, 50)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 15
@@ -433,7 +521,7 @@ function buildMain()
         end
     end
 
-    local tabNames = {"AIM", "ESP"}
+    local tabNames = {"AIM", "ESP", "FPS"}
     local tabWidth = (1 / #tabNames)
     for i, name in ipairs(tabNames) do
         local t = Instance.new("TextButton")
@@ -458,7 +546,7 @@ function buildMain()
         s.BackgroundTransparency = 1
         s.BorderSizePixel = 0
         s.ScrollBarThickness = 4
-        s.CanvasSize = UDim2.new(0, 0, 0, 500)
+        s.CanvasSize = UDim2.new(0, 0, 0, 600)
         s.Visible = false
         s.Parent = contentContainer
         return s
@@ -466,6 +554,7 @@ function buildMain()
 
     local aimScroll = makeScroll("AIM")
     local espScroll = makeScroll("ESP")
+    local fpsScroll = makeScroll("FPS")
 
     local function makeToggle(parent, text, yPos, initial, callback)
         local btn = Instance.new("TextButton")
@@ -522,14 +611,10 @@ function buildMain()
 
         local dragging = false
         bar.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true
-            end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true end
         end)
         UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
-            end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
         end)
         UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
@@ -578,6 +663,7 @@ function buildMain()
         end
     end
 
+    -- AIM TAB
     local yAim = 5
     makeToggle(aimScroll, "Aim Assist", yAim, Config.AimEnabled, function(v) Config.AimEnabled = v end); yAim = yAim + 38
     makeSlider(aimScroll, "Smoothness", yAim, 1, 20, Config.AimSmoothness, function(v) Config.AimSmoothness = v end); yAim = yAim + 42
@@ -585,7 +671,11 @@ function buildMain()
     makeSlider(aimScroll, "Max Distance", yAim, 50, 1000, Config.AimMaxDist, function(v) Config.AimMaxDist = v end); yAim = yAim + 42
     makeToggle(aimScroll, "Humanize Aim", yAim, Config.AimHumanize, function(v) Config.AimHumanize = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Wall Check", yAim, Config.AimWallCheck, function(v) Config.AimWallCheck = v end); yAim = yAim + 38
-    makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 42
+    makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 38
+    makeToggle(aimScroll, "No Recoil", yAim, Config.NoRecoilEnabled, function(v)
+        Config.NoRecoilEnabled = v
+        if v then enableNoRecoil() else disableNoRecoil() end
+    end); yAim = yAim + 38
     makeToggle(aimScroll, "FOV Circle", yAim, Config.FOVCircleEnabled, function(v)
         Config.FOVCircleEnabled = v
         if FOVCircle then FOVCircle.Visible = v end
@@ -598,12 +688,13 @@ function buildMain()
         Config.LockIndicatorEnabled = v
         if not v and LockIndicator then LockIndicator.Visible = false end
     end); yAim = yAim + 38
-    makeColorPicker(aimScroll, "Lock Indicator Color", yAim, Config.LockIndicatorColor, function(c)
+    makeColorPicker(aimScroll, "Lock Indicator Color (R,G,B)", yAim, Config.LockIndicatorColor, function(c)
         Config.LockIndicatorColor = c
         if LockIndicator then LockIndicator.Color = c end
     end); yAim = yAim + 52
     aimScroll.CanvasSize = UDim2.new(0, 0, 0, yAim)
 
+    -- ESP TAB
     local yEsp = 5
     makeToggle(espScroll, "ESP", yEsp, Config.ESPEnabled, function(v) Config.ESPEnabled = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Box", yEsp, Config.ESPBox, function(v) Config.ESPBox = v end); yEsp = yEsp + 38
@@ -612,6 +703,26 @@ function buildMain()
     makeToggle(espScroll, "ESP Health", yEsp, Config.ESPHealth, function(v) Config.ESPHealth = v end); yEsp = yEsp + 38
     makeToggle(espScroll, "ESP Team Check", yEsp, Config.ESPTeamCheck, function(v) Config.ESPTeamCheck = v end); yEsp = yEsp + 42
     espScroll.CanvasSize = UDim2.new(0, 0, 0, yEsp)
+
+    -- FPS TAB
+    local yFps = 5
+    makeToggle(fpsScroll, "FPS Booster", yFps, Config.FPSBoostEnabled, function(v)
+        Config.FPSBoostEnabled = v
+        if v then boostFPS() else disableFPSBoost() end
+    end); yFps = yFps + 38
+    makeToggle(fpsScroll, "Remove Shadows", yFps, Config.FPSBoostShadows, function(v)
+        Config.FPSBoostShadows = v
+        if Config.FPSBoostEnabled and v then boostFPS() end
+    end); yFps = yFps + 38
+    makeToggle(fpsScroll, "Remove Particles", yFps, Config.FPSBoostParticles, function(v)
+        Config.FPSBoostParticles = v
+        if Config.FPSBoostEnabled and v then boostFPS() end
+    end); yFps = yFps + 38
+    makeToggle(fpsScroll, "Remove Textures", yFps, Config.FPSBoostTextures, function(v)
+        Config.FPSBoostTextures = v
+        if Config.FPSBoostEnabled and v then boostFPS() end
+    end); yFps = yFps + 42
+    fpsScroll.CanvasSize = UDim2.new(0, 0, 0, yFps)
 
     switchTab("AIM")
     log("Main UI built")
@@ -630,13 +741,12 @@ safe("init-lock", initLockIndicator)
 
 RunService.RenderStepped:Connect(function()
     if FOVCircle then
-        local ok, err = pcall(function()
+        pcall(function()
             FOVCircle.Position = Camera.ViewportSize / 2
             FOVCircle.Radius = Config.AimFOV
             FOVCircle.Visible = Config.FOVCircleEnabled
             FOVCircle.Color = Config.FOVCircleColor
         end)
-        if not ok then warn_("FOV update: " .. tostring(err)) end
     end
 
     local target = nil
@@ -651,12 +761,11 @@ RunService.RenderStepped:Connect(function()
     end
 
     if LockIndicator then
-        local ok, err = pcall(function()
+        pcall(function()
             LockIndicator.Position = Camera.ViewportSize / 2
             LockIndicator.Visible = Config.LockIndicatorEnabled and target ~= nil
             LockIndicator.Color = Config.LockIndicatorColor
         end)
-        if not ok then warn_("Lock update: " .. tostring(err)) end
     end
 
     safe("esp", updateESP)
@@ -669,4 +778,4 @@ task.spawn(function()
 end)
 
 safe("build-ui", buildUI)
-log("EZ HUB v2 loaded.")
+log("EZ HUB v3 loaded.")
