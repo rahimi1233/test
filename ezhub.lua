@@ -1,5 +1,5 @@
--- ez_hub_v4_permanent.lua
--- EZ HUB v4 — Permanent key emy210208
+-- ez_hub_v5_no_fps.lua
+-- EZ HUB v5 — No FPS module. Key emy210208 permanent.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -7,7 +7,6 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
-local Lighting = game:GetService("Lighting")
 
 local hasDrawing = (typeof(Drawing) == "table" and typeof(Drawing.new) == "function")
 local hasHookFn = (typeof(hookfunction) == "function")
@@ -22,7 +21,7 @@ local function safe(name, fn, ...)
     return ok
 end
 
--- ================= KEY SYSTEM (VERSI 1 — PERMANENT) =================
+-- ================= KEY SYSTEM =================
 local VALID_KEYS = {
     ["emy210208"] = true,
 }
@@ -47,10 +46,6 @@ local Config = {
     FOVCircleColor = Color3.fromRGB(255, 50, 50),
     LockIndicatorEnabled = true,
     LockIndicatorColor = Color3.fromRGB(100, 255, 100),
-    FPSBoostEnabled = false,
-    FPSBoostShadows = false,
-    FPSBoostTextures = false,
-    FPSBoostParticles = false,
 }
 
 -- ================= SHADOW BYPASS =================
@@ -281,7 +276,7 @@ local function humanizeTarget(targetPos)
     return targetPos + Vector3.new(math.sin(t * 3.1) * 0.15, math.cos(t * 2.7) * 0.15, math.sin(t * 4.3) * 0.1)
 end
 
--- ================= NO RECOIL (HARD LOCK LURUS) =================
+-- ================= NO RECOIL =================
 local recoilConnection = nil
 local lockedPitch = nil
 
@@ -310,63 +305,6 @@ local function disableNoRecoil()
     log("No Recoil OFF")
 end
 
--- ================= FPS BOOSTER =================
-local originalSettings = {Ambient=nil, OutdoorAmbient=nil, GlobalShadows=nil, Brightness=nil}
-local savedObjects = {}
-
-local function boostFPS()
-    originalSettings.Ambient = Lighting.Ambient
-    originalSettings.OutdoorAmbient = Lighting.OutdoorAmbient
-    originalSettings.GlobalShadows = Lighting.GlobalShadows
-    originalSettings.Brightness = Lighting.Brightness
-    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
-    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
-    Lighting.GlobalShadows = false
-    Lighting.Brightness = 1
-    if Config.FPSBoostShadows then
-        for _, obj in ipairs(Lighting:GetChildren()) do
-            if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") then
-                obj.Enabled = false
-                table.insert(savedObjects, {obj, "effect"})
-            end
-        end
-    end
-    if Config.FPSBoostParticles then
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") then
-                obj.Enabled = false
-                table.insert(savedObjects, {obj, "particle"})
-            end
-        end
-    end
-    if Config.FPSBoostTextures then
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("Decal") or obj:IsA("Texture") then
-                obj.Transparency = 1
-                table.insert(savedObjects, {obj, "texture"})
-            end
-        end
-    end
-    log("FPS Boost applied")
-end
-
-local function disableFPSBoost()
-    Lighting.Ambient = originalSettings.Ambient or Color3.fromRGB(0, 0, 0)
-    Lighting.OutdoorAmbient = originalSettings.OutdoorAmbient or Color3.fromRGB(128, 128, 128)
-    Lighting.GlobalShadows = originalSettings.GlobalShadows ~= false
-    Lighting.Brightness = originalSettings.Brightness or 2
-    for _, entry in ipairs(savedObjects) do
-        local obj, kind = entry[1], entry[2]
-        if obj and obj.Parent then
-            if kind == "effect" then obj.Enabled = true
-            elseif kind == "particle" then obj.Enabled = true
-            elseif kind == "texture" then obj.Transparency = 0 end
-        end
-    end
-    savedObjects = {}
-    log("FPS Boost disabled")
-end
-
 -- ================= UI =================
 local gui, main, tabsContainer, contentContainer
 local tabs = {}
@@ -374,11 +312,11 @@ local buildMain
 
 local function buildUI()
     local parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
-    local old = parent:FindFirstChild("EZ_HUB_V4")
+    local old = parent:FindFirstChild("EZ_HUB_V5")
     if old then old:Destroy() end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "EZ_HUB_V4"
+    gui.Name = "EZ_HUB_V5"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 999
@@ -482,7 +420,7 @@ function buildMain()
     title.Size = UDim2.new(1, -90, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "EZ HUB v4 — emy210208"
+    title.Text = "EZ HUB v5 — emy210208"
     title.TextColor3 = Color3.fromRGB(220, 50, 50)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 14
@@ -551,7 +489,7 @@ function buildMain()
         end
     end
 
-    local tabNames = {"AIM", "ESP", "FPS"}
+    local tabNames = {"AIM", "ESP"}
     local tabWidth = (1 / #tabNames)
     for i, name in ipairs(tabNames) do
         local t = Instance.new("TextButton")
@@ -584,7 +522,6 @@ function buildMain()
 
     local aimScroll = makeScroll("AIM")
     local espScroll = makeScroll("ESP")
-    local fpsScroll = makeScroll("FPS")
 
     local function makeToggle(parent, text, yPos, initial, callback)
         local btn = Instance.new("TextButton")
@@ -774,26 +711,6 @@ function buildMain()
     makeToggle(espScroll, "ESP Team Check", yEsp, Config.ESPTeamCheck, function(v) Config.ESPTeamCheck = v end); yEsp = yEsp + 42
     espScroll.CanvasSize = UDim2.new(0, 0, 0, yEsp)
 
-    -- FPS TAB
-    local yFps = 5
-    makeToggle(fpsScroll, "FPS Booster", yFps, Config.FPSBoostEnabled, function(v)
-        Config.FPSBoostEnabled = v
-        if v then boostFPS() else disableFPSBoost() end
-    end); yFps = yFps + 38
-    makeToggle(fpsScroll, "Remove Shadows", yFps, Config.FPSBoostShadows, function(v)
-        Config.FPSBoostShadows = v
-        if Config.FPSBoostEnabled and v then boostFPS() end
-    end); yFps = yFps + 38
-    makeToggle(fpsScroll, "Remove Particles", yFps, Config.FPSBoostParticles, function(v)
-        Config.FPSBoostParticles = v
-        if Config.FPSBoostEnabled and v then boostFPS() end
-    end); yFps = yFps + 38
-    makeToggle(fpsScroll, "Remove Textures", yFps, Config.FPSBoostTextures, function(v)
-        Config.FPSBoostTextures = v
-        if Config.FPSBoostEnabled and v then boostFPS() end
-    end); yFps = yFps + 42
-    fpsScroll.CanvasSize = UDim2.new(0, 0, 0, yFps)
-
     switchTab("AIM")
     log("Main UI built")
 end
@@ -848,4 +765,4 @@ task.spawn(function()
 end)
 
 safe("build-ui", buildUI)
-log("EZ HUB v4 loaded. Key: emy210208 (permanent)")
+log("EZ HUB v5 loaded. Key: emy210208")
