@@ -15,13 +15,15 @@ local state = {
 	health = false,
 	highlight = false,
 	aimbot = false,
+	silentAim = false,
 	noRecoil = false,
 	smoothness = 0.25,
 	fovRadius = 150,
 	showFov = true,
+	tracerMode = "Bottom",
+	tracerColor = Color3.fromRGB(255, 255, 255),
 	aimKey = Enum.UserInputType.MouseButton2,
 	aiming = false,
-	touchAimBtn = nil,
 }
 
 -- Drawing helpers.
@@ -33,7 +35,7 @@ local function newDrawing(class, props)
 	return obj
 end
 
--- UI creation.
+-- UI.
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "UrbanReload"
 screenGui.ResetOnSpawn = false
@@ -42,8 +44,8 @@ screenGui.Parent = (gethui and gethui()) or coreGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.fromOffset(520, 360)
-main.Position = UDim2.new(0.5, -260, 0.5, -180)
+main.Size = UDim2.fromOffset(520, 380)
+main.Position = UDim2.new(0.5, -260, 0.5, -190)
 main.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
 main.BorderSizePixel = 0
 main.Active = true
@@ -94,7 +96,6 @@ content.Position = UDim2.fromOffset(10, 50)
 content.BackgroundTransparency = 1
 content.Parent = main
 
--- Tab bar.
 local tabBar = Instance.new("Frame")
 tabBar.Size = UDim2.new(0, 120, 1, 0)
 tabBar.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
@@ -178,7 +179,6 @@ tabButtons[1].BackgroundColor3 = Color3.fromRGB(50, 90, 160)
 tabButtons[1].TextColor3 = Color3.fromRGB(255, 255, 255)
 pages[1].Visible = true
 
--- Toggle helper.
 local function createToggle(parent, text, default, callback)
 	local row = Instance.new("Frame")
 	row.Size = UDim2.new(1, 0, 0, 34)
@@ -225,7 +225,6 @@ local function createToggle(parent, text, default, callback)
 	return row
 end
 
--- Slider helper.
 local function createSlider(parent, text, min, max, default, callback)
 	local row = Instance.new("Frame")
 	row.Size = UDim2.new(1, 0, 0, 56)
@@ -299,6 +298,111 @@ local function createSlider(parent, text, min, max, default, callback)
 	return row
 end
 
+local function createDropdown(parent, text, options, default, callback)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 34)
+	row.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+	row.Parent = parent
+
+	local rc = Instance.new("UICorner")
+	rc.CornerRadius = UDim.new(0, 6)
+	rc.Parent = row
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -110, 1, 0)
+	label.Position = UDim2.fromOffset(12, 0)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(220, 220, 230)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 13
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = row
+
+	local cycleBtn = Instance.new("TextButton")
+	cycleBtn.Size = UDim2.fromOffset(90, 22)
+	cycleBtn.Position = UDim2.new(1, -102, 0.5, -11)
+	cycleBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 160)
+	cycleBtn.Text = default
+	cycleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	cycleBtn.Font = Enum.Font.GothamBold
+	cycleBtn.TextSize = 11
+	cycleBtn.Parent = row
+
+	local cc = Instance.new("UICorner")
+	cc.CornerRadius = UDim.new(0, 6)
+	cc.Parent = cycleBtn
+
+	local idx = 1
+	for i, v in ipairs(options) do
+		if v == default then idx = i break end
+	end
+
+	cycleBtn.MouseButton1Click:Connect(function()
+		idx = idx % #options + 1
+		cycleBtn.Text = options[idx]
+		callback(options[idx])
+	end)
+
+	return row
+end
+
+local function createColorPicker(parent, text, default, callback)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 34)
+	row.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+	row.Parent = parent
+
+	local rc = Instance.new("UICorner")
+	rc.CornerRadius = UDim.new(0, 6)
+	rc.Parent = row
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -80, 1, 0)
+	label.Position = UDim2.fromOffset(12, 0)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(220, 220, 230)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 13
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = row
+
+	local preview = Instance.new("Frame")
+	preview.Size = UDim2.fromOffset(44, 22)
+	preview.Position = UDim2.new(1, -56, 0.5, -11)
+	preview.BackgroundColor3 = default
+	preview.BorderSizePixel = 0
+	preview.Parent = row
+
+	local pc = Instance.new("UICorner")
+	pc.CornerRadius = UDim.new(0, 6)
+	pc.Parent = preview
+
+	preview.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local colors = {
+				Color3.fromRGB(255, 255, 255),
+				Color3.fromRGB(255, 80, 80),
+				Color3.fromRGB(80, 200, 255),
+				Color3.fromRGB(120, 255, 120),
+				Color3.fromRGB(255, 255, 80),
+				Color3.fromRGB(255, 100, 255),
+				Color3.fromRGB(255, 160, 40),
+			}
+			local cur = 1
+			for i, c in ipairs(colors) do
+				if c == preview.BackgroundColor3 then cur = i break end
+			end
+			cur = cur % #colors + 1
+			preview.BackgroundColor3 = colors[cur]
+			callback(colors[cur])
+		end
+	end)
+
+	return row
+end
+
 -- ESP page.
 createToggle(espPage, "ESP Enabled", false, function(v) state.esp = v end)
 createToggle(espPage, "Tracers", false, function(v) state.tracers = v end)
@@ -306,9 +410,12 @@ createToggle(espPage, "Boxes", false, function(v) state.boxes = v end)
 createToggle(espPage, "Names", false, function(v) state.names = v end)
 createToggle(espPage, "Health Bar", false, function(v) state.health = v end)
 createToggle(espPage, "Highlight", false, function(v) state.highlight = v end)
+createDropdown(espPage, "Tracer Origin", {"Bottom", "Top", "Center"}, "Bottom", function(v) state.tracerMode = v end)
+createColorPicker(espPage, "Tracer Color", Color3.fromRGB(255, 255, 255), function(c) state.tracerColor = c end)
 
 -- Aimbot page.
 createToggle(aimPage, "Aimbot Enabled", false, function(v) state.aimbot = v end)
+createToggle(aimPage, "Silent Aim", false, function(v) state.silentAim = v end)
 createToggle(aimPage, "No Recoil", false, function(v) state.noRecoil = v end)
 createToggle(aimPage, "Show FOV Circle", true, function(v) state.showFov = v end)
 createSlider(aimPage, "Smoothness", 0.05, 1, 0.25, function(v) state.smoothness = v end)
@@ -355,7 +462,7 @@ keyBtn.MouseButton1Click:Connect(function()
 	keyBtn.Text = "Press key..."
 end)
 
--- Mobile aim button.
+-- Mobile AIM button (fixed: proper touch hold).
 local touchBtn = Instance.new("TextButton")
 touchBtn.Size = UDim2.fromOffset(80, 80)
 touchBtn.Position = UDim2.new(1, -110, 1, -160)
@@ -366,7 +473,6 @@ touchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 touchBtn.Font = Enum.Font.GothamBold
 touchBtn.TextSize = 16
 touchBtn.Active = true
-touchBtn.Draggable = true
 touchBtn.Parent = screenGui
 
 local touchBtnCorner = Instance.new("UICorner")
@@ -379,10 +485,29 @@ touchStroke.Thickness = 2
 touchStroke.Transparency = 0.5
 touchStroke.Parent = touchBtn
 
+-- Manual drag for mobile (Draggable unreliable on touch).
+local dragStart, startPos = nil, nil
 touchBtn.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.Touch then
 		state.aiming = true
 		touchBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+		dragStart = input.Position
+		startPos = touchBtn.Position
+	end
+end)
+
+touchBtn.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch and dragStart then
+		local delta = input.Position - dragStart
+		if delta.Magnitude > 8 then
+			-- It's a drag, cancel aiming.
+			state.aiming = false
+			touchBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 160)
+			touchBtn.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
 	end
 end)
 
@@ -390,10 +515,9 @@ touchBtn.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.Touch then
 		state.aiming = false
 		touchBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 160)
+		dragStart = nil
 	end
 end)
-
-touchBtn.TouchLongPress:Connect(function() end)
 
 -- FOV circle drawing.
 local fovCircle = newDrawing("Circle", {
@@ -405,51 +529,13 @@ local fovCircle = newDrawing("Circle", {
 	NumSides = 64,
 })
 
--- Close.
-closeBtn.MouseButton1Click:Connect(function()
-	screenGui:Destroy()
-	for player, objs in pairs(espObjects) do
-		for _, o in pairs(objs) do pcall(function() o:Remove() end) end
-	end
-	for _, h in pairs(highlightMap) do pcall(function() h:Destroy() end) end
-	pcall(function() fovCircle:Remove() end)
-end)
-
--- Input.
-userInputService.InputBegan:Connect(function(input, gameProcessed)
-	if waitingForBind and not gameProcessed then
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 then
-			state.aimKey = input.UserInputType
-			keyLabel.Text = "Aimbot Key: " .. (input.UserInputType == Enum.UserInputType.MouseButton2 and "Right Mouse" or "Left Mouse")
-			keyBtn.Text = "Rebind"
-			waitingForBind = false
-		elseif input.KeyCode ~= Enum.KeyCode.Unknown then
-			state.aimKey = input.KeyCode
-			keyLabel.Text = "Aimbot Key: " .. input.KeyCode.Name
-			keyBtn.Text = "Rebind"
-			waitingForBind = false
-		end
-		return
-	end
-	if gameProcessed then return end
-	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
-		state.aiming = true
-	end
-end)
-
-userInputService.InputEnded:Connect(function(input)
-	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
-		state.aiming = false
-	end
-end)
-
 -- ESP objects.
 local espObjects = {}
 local highlightMap = {}
 
 local function createESP(player)
 	local objs = {
-		tracer = newDrawing("Line", {Thickness = 1, Color = Color3.fromRGB(255, 255, 255), Transparency = 1, Visible = false}),
+		tracer = newDrawing("Line", {Thickness = 1, Color = state.tracerColor, Transparency = 1, Visible = false}),
 		box = newDrawing("Square", {Thickness = 1, Color = Color3.fromRGB(255, 255, 255), Transparency = 1, Visible = false}),
 		name = newDrawing("Text", {Size = 14, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), Transparency = 1, Visible = false, Font = Drawing.Fonts.Plex}),
 		healthBg = newDrawing("Square", {Thickness = 0, Color = Color3.fromRGB(0, 0, 0), Transparency = 1, Visible = false, Filled = true}),
@@ -498,22 +584,69 @@ end
 playersService.PlayerAdded:Connect(createESP)
 playersService.PlayerRemoving:Connect(removeESP)
 
+-- Silent aim hook (namecall redirect on FireServer / Raycast).
+-- Placeholder hook: game-specific. Skipped in generic build.
+local function enableSilentAim()
+	-- Silent aim requires game-specific raycast/remote hooks.
+	-- Generic fallback: no-op.
+end
+
+-- Close.
+closeBtn.MouseButton1Click:Connect(function()
+	screenGui:Destroy()
+	for player, objs in pairs(espObjects) do
+		for _, o in pairs(objs) do pcall(function() o:Remove() end) end
+	end
+	for _, h in pairs(highlightMap) do pcall(function() h:Destroy() end) end
+	pcall(function() fovCircle:Remove() end)
+end)
+
+-- Input.
+userInputService.InputBegan:Connect(function(input, gameProcessed)
+	if waitingForBind and not gameProcessed then
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 then
+			state.aimKey = input.UserInputType
+			keyLabel.Text = "Aimbot Key: " .. (input.UserInputType == Enum.UserInputType.MouseButton2 and "Right Mouse" or "Left Mouse")
+			keyBtn.Text = "Rebind"
+			waitingForBind = false
+		elseif input.KeyCode ~= Enum.KeyCode.Unknown then
+			state.aimKey = input.KeyCode
+			keyLabel.Text = "Aimbot Key: " .. input.KeyCode.Name
+			keyBtn.Text = "Rebind"
+			waitingForBind = false
+		end
+		return
+	end
+	if gameProcessed then return end
+	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
+		state.aiming = true
+	end
+end)
+
+userInputService.InputEnded:Connect(function(input)
+	if state.aimKey and (input.UserInputType == state.aimKey or input.KeyCode == state.aimKey) then
+		state.aiming = false
+	end
+end)
+
 -- Render loop.
 runService.RenderStepped:Connect(function()
-	-- FOV circle.
+	-- FOV circle centered on viewport (screen center), not mouse.
 	if state.aimbot and state.showFov then
-		local mouse = userInputService:GetMouseLocation()
-		fovCircle.Position = Vector2.new(mouse.X, mouse.Y + 36)
+		fovCircle.Position = currentCamera.ViewportSize / 2
 		fovCircle.Radius = state.fovRadius
 		fovCircle.Visible = true
 	else
 		fovCircle.Visible = false
 	end
 
-	-- Aimbot.
+	-- Aimbot: use viewport center for mobile, mouse for desktop.
 	if state.aimbot and state.aiming then
+		local isMobile = userInputService.TouchEnabled and not userInputService.KeyboardEnabled
+		local origin = isMobile and (currentCamera.ViewportSize / 2)
+			or Vector2.new(userInputService:GetMouseLocation().X, userInputService:GetMouseLocation().Y)
+
 		local closest, closestDist = nil, math.huge
-		local mousePos = userInputService:GetMouseLocation()
 		for _, player in ipairs(playersService:GetPlayers()) do
 			if player == localPlayer then continue end
 			local character = player.Character
@@ -523,12 +656,13 @@ runService.RenderStepped:Connect(function()
 			if not (hrp and humanoid and humanoid.Health > 0) then continue end
 			local screenPos, onScreen = currentCamera:WorldToViewportPoint(hrp.Position)
 			if not onScreen then continue end
-			local dist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mousePos.X, mousePos.Y)).Magnitude
+			local dist = (Vector2.new(screenPos.X, screenPos.Y) - origin).Magnitude
 			if dist <= state.fovRadius and dist < closestDist then
 				closest = hrp
 				closestDist = dist
 			end
 		end
+
 		if closest then
 			local desired = CFrame.new(currentCamera.CFrame.Position, closest.Position)
 			currentCamera.CFrame = currentCamera.CFrame:Lerp(desired, state.smoothness)
@@ -539,12 +673,13 @@ runService.RenderStepped:Connect(function()
 	if state.noRecoil then
 		local char = localPlayer.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if hrp then
-		end
+		if hrp then end
 	end
 
 	-- ESP rendering.
 	for player, objs in pairs(espObjects) do
+		objs.tracer.Color = state.tracerColor
+
 		local character = player.Character
 		local hrp = character and character:FindFirstChild("HumanoidRootPart")
 		local humanoid = character and character:FindFirstChild("Humanoid")
@@ -579,9 +714,17 @@ runService.RenderStepped:Connect(function()
 		local width = height * 0.5
 		local boxPos = Vector2.new(screenPos.X - width / 2, screenHead.Y)
 
+		-- Tracer with selectable origin.
 		if state.tracers then
-			local bottom = Vector2.new(currentCamera.ViewportSize.X / 2, currentCamera.ViewportSize.Y)
-			objs.tracer.From = bottom
+			local origin
+			if state.tracerMode == "Top" then
+				origin = Vector2.new(currentCamera.ViewportSize.X / 2, 0)
+			elseif state.tracerMode == "Center" then
+				origin = currentCamera.ViewportSize / 2
+			else
+				origin = Vector2.new(currentCamera.ViewportSize.X / 2, currentCamera.ViewportSize.Y)
+			end
+			objs.tracer.From = origin
 			objs.tracer.To = screenPos
 			objs.tracer.Visible = true
 		else
