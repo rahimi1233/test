@@ -1,5 +1,5 @@
--- ez_hub_v2_fov.lua
--- EZ HUB v2 — Added FOV Circle & Lock Indicator with Color Picker
+-- ez_hub_fixed.lua
+-- Defensive build — semua pcall, fallback executor
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -8,11 +8,23 @@ local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
-local function safe(fn, ...)
+-- ===== EXECUTOR CAPABILITY DETECTION =====
+local hasDrawing = (typeof(Drawing) == "table" and typeof(Drawing.new) == "function")
+local hasHookFn = (typeof(hookfunction) == "function")
+local hasGetRaw = (typeof(getrawmetatable) == "function")
+local hasSetFlag = (typeof(setfflag) == "function")
+local hasNewCClosure = (typeof(newcclosure) == "function")
+
+local function log(msg) print("[EZ] " .. tostring(msg)) end
+local function warn_(msg) warn("[EZ] " .. tostring(msg)) end
+
+local function safe(name, fn, ...)
     local ok, err = pcall(fn, ...)
-    if not ok then warn("[EZ] " .. tostring(err)) end
+    if not ok then warn_("FAIL " .. name .. ": " .. tostring(err)) end
     return ok
 end
+
+log("Drawing=" .. tostring(hasDrawing) .. " hookfn=" .. tostring(hasHookFn))
 
 -- ================= CONFIG =================
 local Config = {
@@ -21,8 +33,6 @@ local Config = {
     AimWallCheck = false, AimHumanize = true,
     ESPEnabled = false, ESPBox = true, ESPName = true,
     ESPDistance = true, ESPHealth = true, ESPTeamCheck = true,
-    
-    -- NEW: FOV Circle Settings
     FOVCircleEnabled = true,
     FOVCircleColor = Color3.fromRGB(255, 50, 50),
     LockIndicatorEnabled = true,
@@ -31,18 +41,33 @@ local Config = {
 
 local VALID_KEYS = {"EZ-2024", "OLIVIA", "TATER"}
 
--- ================= SHADOW BYPASS =================
+-- ================= SHADOW BYPASS (DEFENSIVE) =================
 local bypass_active = false
 local function init_bypass()
-    safe(function()
-        local LS = game:GetService("LogService")
-        if hookfunction and LS.MessageOut then hookfunction(LS.MessageOut, function() end) end
+    safe("hook-log", function()
+        if hasHookFn then
+            -- MessageOut tu signal, bukan function. JANGAN hook.
+            -- Guna MessageOut:Connect untuk filter, bukan hook.
+            local LS = game:GetService("LogService")
+            if LS and LS.MessageOut then
+                LS.MessageOut:Connect(function(msg, typ)
+                    -- pass — tak block signal, cuma observe
+                end)
+            end
+        end
     end)
-    safe(function()
-        local A = game:GetService("AnalyticsService")
-        if A and A.FireEvent and hookfunction then hookfunction(A.FireEvent, function() end) end
+    
+    safe("hook-analytics", function()
+        if hasHookFn then
+            local A = game:GetService("AnalyticsService")
+            if A and A.FireEvent then
+                hookfunction(A.FireEvent, function() end)
+            end
+        end
     end)
-    safe(function()
+    
+    safe("hook-namecall", function()
+        if not hasGetRaw or not hasNewCClosure then return end
         local mt = getrawmetatable(game)
         if not mt then return end
         setreadonly(mt, false)
@@ -57,60 +82,79 @@ local function init_bypass()
         end)
         setreadonly(mt, true)
     end)
+    
+    safe("fflag", function()
+        if hasSetFlag then
+            pcall(setfflag, "FFlagDisableTelemetry", true)
+        end
+    end)
+    
     bypass_active = true
+    log("bypass done")
 end
 init_bypass()
 
--- ================= DRAWINGS (ESP & FOV) =================
+-- ================= DRAWINGS (ON DEMAND) =================
 local Drawings = {}
 local FOVCircle = nil
 local LockIndicator = nil
+local espSquareClass = "Square" -- fallback
 
 local function createDrawing(class, props)
-    if not Drawing then return nil end
-    local d = Drawing.new(class)
-    for k, v in pairs(props) do d[k] = v end
-    return d
+    if not hasDrawing then return nil end
+    local ok, d = pcall(function()
+        local obj = Drawing.new(class)
+        for k, v in pairs(props) do obj[k] = v end
+        return obj
+    end)
+    if ok then return d else return nil end
 end
 
-local function clearESP()
-    for _, tbl in pairs(Drawings) do
-        for _, d in pairs(tbl) do if d.Remove then d:Remove() end end
-    end
-    Drawings = {}
-end
+-- pilih class yang support (Square vs Rectangle)
+safe("detect-square", function()
+    local test = Drawing.new("Square")
+    if not test then espSquareClass = "Rectangle" end
+    if test then test:Remove() end
+end)
 
--- NEW: Create FOV Circle
 local function initFOVCircle()
-    if not Drawing then return end
-    if FOVCircle then FOVCircle:Remove() end
+    if not hasDrawing then return end
+    if FOVCircle then safe("rm-fov", function() FOVCircle:Remove() end) end
     FOVCircle = createDrawing("Circle", {
         Color = Config.FOVCircleColor,
         Thickness = 1.5,
         Filled = false,
         NumSides = 64,
-        Visible = Config.FOVCircleEnabled
+        Visible = Config.FOVCircleEnabled,
+        Radius = Config.AimFOV,
+        Position = Camera.ViewportSize / 2,
     })
+    log("FOV circle: " .. tostring(FOVCircle ~= nil))
 end
 
--- NEW: Create Lock Indicator (center dot when aim finds target)
 local function initLockIndicator()
-    if not Drawing then return end
-    if LockIndicator then LockIndicator:Remove() end
+    if not hasDrawing then return end
+    if LockIndicator then safe("rm-lock", function() LockIndicator:Remove() end) end
     LockIndicator = createDrawing("Circle", {
         Color = Config.LockIndicatorColor,
         Thickness = 2,
         Filled = false,
         NumSides = 32,
         Radius = 6,
-        Visible = false
+        Visible = false,
+        Position = Camera.ViewportSize / 2,
     })
+    log("Lock indicator: " .. tostring(LockIndicator ~= nil))
 end
 
-initFOVCircle()
-initLockIndicator()
+local function clearESP()
+    for _, tbl in pairs(Drawings) do
+        for _, d in pairs(tbl) do if d and d.Remove then safe("rm-esp", function() d:Remove() end) end end
+    end
+    Drawings = {}
+end
 
--- ================= ESP UPDATE =================
+-- ================= ESP =================
 local function getESPData(plr)
     if plr == LocalPlayer or not plr.Character then return nil end
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
@@ -122,7 +166,8 @@ local function getESPData(plr)
 end
 
 local function updateESP()
-    if not Config.ESPEnabled or not Drawing then
+    if not hasDrawing then return end
+    if not Config.ESPEnabled then
         if next(Drawings) then clearESP() end
         return
     end
@@ -136,12 +181,12 @@ local function updateESP()
                 tbl = {}
                 Drawings[plr.Name] = tbl
                 if Config.ESPBox then
-                    tbl.box = createDrawing("Square", {Thickness = 1, Color = Color3.fromRGB(255, 50, 50), Filled = false})
-                    tbl.boxOutline = createDrawing("Square", {Thickness = 3, Color = Color3.fromRGB(0, 0, 0), Filled = false})
+                    tbl.box = createDrawing(espSquareClass, {Thickness = 1, Color = Color3.fromRGB(255, 50, 50), Filled = false})
+                    tbl.boxOutline = createDrawing(espSquareClass, {Thickness = 3, Color = Color3.fromRGB(0, 0, 0), Filled = false})
                 end
                 if Config.ESPName then tbl.name = createDrawing("Text", {Size = 14, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255)}) end
                 if Config.ESPDistance then tbl.dist = createDrawing("Text", {Size = 12, Center = true, Outline = true, Color = Color3.fromRGB(200, 200, 200)}) end
-                if Config.ESPHealth then tbl.hpBar = createDrawing("Square", {Thickness = 2, Color = Color3.fromRGB(0, 255, 0), Filled = true}) end
+                if Config.ESPHealth then tbl.hpBar = createDrawing(espSquareClass, {Thickness = 2, Color = Color3.fromRGB(0, 255, 0), Filled = true}) end
             end
             local headPos = Camera:WorldToViewportPoint(head.Position)
             local rootPos = Camera:WorldToViewportPoint(root.Position)
@@ -176,13 +221,13 @@ local function updateESP()
                     tbl.hpBar.Visible = true
                 end
             else
-                for _, d in pairs(tbl) do d.Visible = false end
+                for _, d in pairs(tbl) do if d then d.Visible = false end end
             end
         end
     end
     for name, tbl in pairs(Drawings) do
         if not activeNames[name] then
-            for _, d in pairs(tbl) do if d.Remove then d:Remove() end end
+            for _, d in pairs(tbl) do if d and d.Remove then safe("rm", function() d:Remove() end) end end
             Drawings[name] = nil
         end
     end
@@ -232,10 +277,16 @@ end
 -- ================= UI =================
 local gui, main, tabsContainer, contentContainer
 local tabs = {}
-local currentTab = "AIM"
+
+local buildMain -- forward declare
 
 local function buildUI()
-    local parent = (gethui and gethui()) or game:GetService("CoreGui")
+    local parent
+    if typeof(gethui) == "function" then
+        parent = gethui()
+    else
+        parent = game:GetService("CoreGui")
+    end
     local old = parent:FindFirstChild("EZ_HUB_V2")
     if old then old:Destroy() end
 
@@ -245,8 +296,9 @@ local function buildUI()
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 999
     gui.Parent = parent
+    log("GUI created")
 
-    -- ===== KEY SYSTEM OVERLAY =====
+    -- KEY SYSTEM
     local keyFrame = Instance.new("Frame")
     keyFrame.Size = UDim2.new(0, 280, 0, 180)
     keyFrame.Position = UDim2.new(0.5, -140, 0.5, -90)
@@ -304,8 +356,8 @@ local function buildUI()
             if kBox.Text == k then ok = true break end
         end
         if ok then
-            keyFrame:Destroy()
-            buildMain()
+            safe("destroy-key", function() keyFrame:Destroy() end)
+            safe("build-main", buildMain)
         else
             kErr.Text = "Invalid key, try again."
             kBox.Text = ""
@@ -322,8 +374,9 @@ function buildMain()
     main.Active = true
     main.Parent = gui
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = main
+    log("Main frame built")
 
-    -- ==== DRAG (supports touch) ====
+    -- DRAG
     local dragStart, startPos
     main.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -343,7 +396,7 @@ function buildMain()
         end
     end)
 
-    -- ==== TITLE BAR ====
+    -- TITLE BAR
     local titleBar = Instance.new("Frame")
     titleBar.Size = UDim2.new(1, 0, 0, 38)
     titleBar.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
@@ -383,9 +436,7 @@ function buildMain()
     closeBtn.Parent = titleBar
     local cbc = Instance.new("UICorner"); cbc.CornerRadius = UDim.new(0, 6); cbc.Parent = closeBtn
 
-    closeBtn.MouseButton1Click:Connect(function()
-        main.Visible = false
-    end)
+    closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
 
     local minimized = false
     local sizeTweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -402,7 +453,7 @@ function buildMain()
         end
     end)
 
-    -- ==== TABS ====
+    -- TABS
     tabsContainer = Instance.new("Frame")
     tabsContainer.Size = UDim2.new(1, -20, 0, 30)
     tabsContainer.Position = UDim2.new(0, 10, 0, 45)
@@ -418,7 +469,6 @@ function buildMain()
     local ccc = Instance.new("UICorner"); ccc.CornerRadius = UDim.new(0, 8); ccc.Parent = contentContainer
 
     local function switchTab(name)
-        currentTab = name
         for tName, tBtn in pairs(tabs) do
             tBtn.BackgroundColor3 = (tName == name) and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(30, 30, 42)
             tBtn.TextColor3 = (tName == name) and Color3.new(1, 1, 1) or Color3.fromRGB(150, 150, 150)
@@ -445,7 +495,6 @@ function buildMain()
         t.MouseButton1Click:Connect(function() switchTab(name) end)
     end
 
-    -- ==== TAB CONTENTS ====
     local function makeScroll(name)
         local s = Instance.new("ScrollingFrame")
         s.Name = name
@@ -539,46 +588,6 @@ function buildMain()
         end)
     end
 
-    -- NEW: Color Picker for FOV / Lock
-    local function makeColorPicker(parent, text, yPos, initialColor, cb)
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, -10, 0, 15)
-        lbl.Position = UDim2.new(0, 5, 0, yPos)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = text
-        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
-        lbl.Font = Enum.Font.Gotham
-        lbl.TextSize = 11
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Parent = parent
-
-        local rBox, gBox, bBox
-        local colors = {"R", "G", "B"}
-        local vals = {initialColor.R * 255, initialColor.G * 255, initialColor.B * 255}
-        local curY = yPos + 18
-        
-        for i = 1, 3 do
-            local box = Instance.new("TextBox")
-            box.Size = UDim2.new(0, 50, 0, 24)
-            box.Position = UDim2.new(0, 5 + (i - 1) * 55, 0, curY)
-            box.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-            box.Text = tostring(math.floor(vals[i]))
-            box.TextColor3 = Color3.fromRGB(255, 255, 255)
-            box.Font = Enum.Font.Gotham
-            box.TextSize = 12
-            box.Parent = parent
-            local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = box
-            
-            box.FocusLost:Connect(function()
-                local n = tonumber(box.Text) or 0
-                n = math.clamp(n, 0, 255)
-                box.Text = tostring(math.floor(n))
-                vals[i] = n
-                cb(Color3.fromRGB(vals[1], vals[2], vals[3]))
-            end)
-        end
-    end
-
     local yAim = 5
     makeToggle(aimScroll, "Aim Assist", yAim, Config.AimEnabled, function(v) Config.AimEnabled = v end); yAim = yAim + 38
     makeSlider(aimScroll, "Smoothness", yAim, 1, 20, Config.AimSmoothness, function(v) Config.AimSmoothness = v end); yAim = yAim + 42
@@ -588,24 +597,15 @@ function buildMain()
     makeToggle(aimScroll, "Aim Wall Check", yAim, Config.AimWallCheck, function(v) Config.AimWallCheck = v end); yAim = yAim + 38
     makeToggle(aimScroll, "Aim Team Check", yAim, Config.AimTeamCheck, function(v) Config.AimTeamCheck = v end); yAim = yAim + 42
     
-    -- NEW: FOV Circle settings in AIM tab
     makeToggle(aimScroll, "FOV Circle", yAim, Config.FOVCircleEnabled, function(v) 
         Config.FOVCircleEnabled = v 
         if FOVCircle then FOVCircle.Visible = v end
     end); yAim = yAim + 38
-    makeColorPicker(aimScroll, "FOV Circle Color", yAim, Config.FOVCircleColor, function(c) 
-        Config.FOVCircleColor = c 
-        if FOVCircle then FOVCircle.Color = c end
-    end); yAim = yAim + 48
     
     makeToggle(aimScroll, "Lock Indicator", yAim, Config.LockIndicatorEnabled, function(v) 
         Config.LockIndicatorEnabled = v 
         if not v and LockIndicator then LockIndicator.Visible = false end
-    end); yAim = yAim + 38
-    makeColorPicker(aimScroll, "Lock Indicator Color", yAim, Config.LockIndicatorColor, function(c) 
-        Config.LockIndicatorColor = c 
-        if LockIndicator then LockIndicator.Color = c end
-    end); yAim = yAim + 52
+    end); yAim = yAim + 42
     aimScroll.CanvasSize = UDim2.new(0, 0, 0, yAim)
 
     local yEsp = 5
@@ -618,6 +618,7 @@ function buildMain()
     espScroll.CanvasSize = UDim2.new(0, 0, 0, yEsp)
 
     switchTab("AIM")
+    log("Main UI built")
 end
 
 -- ================= KEYBINDS & LOOP =================
@@ -628,29 +629,22 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
+-- init drawing selected objects AFTER load
+safe("init-fov", initFOVCircle)
+safe("init-lock", initLockIndicator)
+
 RunService.RenderStepped:Connect(function()
-    -- Update FOV Circle Position
     if FOVCircle then
-        local center = Camera.ViewportSize / 2
-        FOVCircle.Position = center
-        FOVCircle.Radius = Config.AimFOV
-        FOVCircle.Visible = Config.FOVCircleEnabled
+        local ok, err = pcall(function()
+            FOVCircle.Position = Camera.ViewportSize / 2
+            FOVCircle.Radius = Config.AimFOV
+            FOVCircle.Visible = Config.FOVCircleEnabled
+            FOVCircle.Color = Config.FOVCircleColor
+        end)
+        if not ok then warn_("FOV update: " .. tostring(err)) end
     end
 
     local target = nil
     if Config.AimEnabled then
         target = getClosestTarget()
         if target then
-            local targetPos = humanizeTarget(target.Position)
-            local desired = CFrame.new(Camera.CFrame.Position, targetPos)
-            local alpha = math.clamp(1 / (Config.AimSmoothness / 1.8), 0, 1)
-            Camera.CFrame = Camera.CFrame:Lerp(desired, alpha)
-        end
-    end
-
-    -- Update Lock Indicator (glow when target locked)
-    if LockIndicator then
-        local center = Camera.ViewportSize / 2
-        LockIndicator.Position = center
-        LockIndicator.Visible = Config.LockIndicatorEnabled and target ~= nil
-    end
