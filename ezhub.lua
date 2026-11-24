@@ -1,7 +1,6 @@
 -- ============================================================
--- ZENO HUB PREMIUM - URBAN RELOAD (Optimized Build v2.1)
+-- ZENO HUB PREMIUM - URBAN RELOAD (ESP Stability Build v2.2)
 -- Owner: Emy210208 | Keyless | Mobile + PC
--- Ultra low CPU/RAM, adaptive render, lazy load.
 -- For authorized testing environments only.
 -- ============================================================
 
@@ -10,7 +9,6 @@ local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local CoreGui = game:GetService("CoreGui")
-local Stats = game:GetService("Stats")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
@@ -25,7 +23,7 @@ local GOLD = Color3.fromRGB(212, 175, 55)
 local GOLD_D = Color3.fromRGB(120, 95, 25)
 local GOLD_L = Color3.fromRGB(255, 235, 170)
 local OWNER = "Emy210208"
-local VER = "2.1"
+local VER = "2.2"
 local IS_MOBILE = UIS.TouchEnabled and not UIS.KeyboardEnabled
 local LOW_END = IS_MOBILE and (UIS.GamepadEnabled == false)
 
@@ -34,15 +32,28 @@ local KEY = "ZenoOpt_" .. tostring(game.GameId)
 if shared[KEY] then pcall(function() shared[KEY]() end) end
 
 -- ============================================================
+-- COMPATIBILITY CHECKS (safe fail, no silent hiding)
+-- ============================================================
+local COMPAT = {
+	drawing = (type(Drawing) == "table" and type(Drawing.new) == "function"),
+	isfile = (type(isfile) == "function"),
+	writefile = (type(writefile) == "function"),
+	makefolder = (type(makefolder) == "function"),
+}
+local function requireCompat()
+	if not COMPAT.drawing then
+		warn("[ZENO HUB] Drawing API unavailable — ESP/FOV disabled.")
+	end
+	return COMPAT.drawing
+end
+
+-- ============================================================
 -- DEVICE MODES
 -- ============================================================
--- Potato:    0 — skip most work, 0.25s ESP, no tweens
--- Balanced:  1 — default, 0.12s ESP, light tweens
--- High:      2 — full visuals, 60fps target
 local MODES = {
-	{ name = "Potato",   espRate = 0.25, fovSides = 32, shadows = false },
-	{ name = "Balanced", espRate = 0.12, fovSides = 48, shadows = true },
-	{ name = "High",     espRate = 0.03, fovSides = 64, shadows = true },
+	{ name = "Potato",   espRate = 0.30, fovSides = 32 },
+	{ name = "Balanced", espRate = 0.12, fovSides = 48 },
+	{ name = "High",     espRate = 0.05, fovSides = 64 },
 }
 local deviceMode = LOW_END and 1 or (IS_MOBILE and 1 or 2)
 
@@ -56,15 +67,16 @@ local S = {
 
 	esp = false, espBox = true, espName = true, espHp = true,
 	espDist = true, espTeam = true, espCol = {255, 255, 255},
+	espInterval = 0,  -- 0 = auto (follow device mode)
 
 	fpsOn = false, fpsMon = true,
 }
 
 local SAVE_FILE = "ZenoHub/opt.json"
-pcall(makefolder, "ZenoHub")
+if COMPAT.makefolder then pcall(makefolder, "ZenoHub") end
 
 local function loadSave()
-	if isfile and isfile(SAVE_FILE) then
+	if COMPAT.isfile and isfile(SAVE_FILE) then
 		local ok, d = pcall(function() return HttpService:JSONDecode(readfile(SAVE_FILE)) end)
 		if ok and type(d) == "table" then
 			for k, v in pairs(d) do if S[k] ~= nil then S[k] = v end end
@@ -74,28 +86,23 @@ end
 loadSave()
 
 local function saveNow()
-	if not writefile then return end
+	if not COMPAT.writefile then return end
 	local ok, e = pcall(function() return HttpService:JSONEncode(S) end)
 	if ok then pcall(writefile, SAVE_FILE, e) end
 end
 
 -- ============================================================
--- SAFETY
+-- ERROR LOG
 -- ============================================================
 local errLog, shutdown = {}, false
 local function err(s, e)
 	table.insert(errLog, ("[%s] %s"):format(s, tostring(e)))
 	if #errLog > 30 then table.remove(errLog, 1) end
-end
-
-local function safe(scope, fn, ...)
-	local ok, r = pcall(fn, ...)
-	if not ok then err(scope, r) end
-	return ok, r
+	warn("[ZENO HUB] " .. errLog[#errLog])
 end
 
 -- ============================================================
--- FAST LOADING (no tween spam)
+-- FAST LOADING
 -- ============================================================
 local LG = Instance.new("ScreenGui")
 LG.Name = "ZenoLoad"
@@ -124,7 +131,7 @@ local LS = Instance.new("TextLabel")
 LS.Size = UDim2.new(1, 0, 0, 16)
 LS.Position = UDim2.fromOffset(0, 40)
 LS.BackgroundTransparency = 1
-LS.Text = "Loading..."
+LS.Text = "Loading ESP system..."
 LS.TextColor3 = Color3.fromRGB(180, 160, 100)
 LS.Font = Enum.Font.Gotham
 LS.TextSize = 10
@@ -144,7 +151,212 @@ LBF.Parent = LBB
 do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 3); c.Parent = LBF end
 
 -- ============================================================
--- UI BUILD (deferred, single pass)
+-- ESP SYSTEM (self-contained, lifecycle-managed)
+-- ============================================================
+-- Rationale: previous ESP built per-player Drawing objects at startup
+-- and kept a permanent Heartbeat. New design:
+--   * Drawings built lazily on first ESP enable.
+--   * Per-player data cached; nothing created for hidden players.
+--   * Heartbeat connection exists ONLY while ESP is ON.
+--   * PlayerRemoving fully tears down that player's drawings.
+--   * Drawings hidden (Visible=false) but kept alive while disabled
+--     to avoid recreate/free thrash. Removed only on full cleanup.
+
+local ESP = {
+	enabled = false,
+	conn = nil,
+	acc = 0,
+	objects = {},    -- [Player] -> { box, name, dist, hpBg, hpFg }
+	interval = MODES[deviceMode + 1].espRate,
+	stats = { players = 0, drawings = 0, lastTick = 0 },
+}
+
+local function espCreateForPlayer(p)
+	if ESP.objects[p] then return end
+	local o = {
+		box = Drawing.new("Square"),
+		name = Drawing.new("Text"),
+		dist = Drawing.new("Text"),
+		hpBg = Drawing.new("Square"),
+		hpFg = Drawing.new("Square"),
+	}
+	o.box.Thickness = 1
+	o.box.Visible = false
+	o.name.Size = 13; o.name.Center = true; o.name.Outline = true; o.name.Font = Drawing.Fonts.Plex
+	o.name.Visible = false
+	o.dist.Size = 11; o.dist.Center = true; o.dist.Outline = true; o.dist.Font = Drawing.Fonts.Plex
+	o.dist.Visible = false
+	o.hpBg.Filled = true; o.hpBg.Visible = false
+	o.hpFg.Filled = true; o.hpFg.Visible = false
+	ESP.objects[p] = o
+	ESP.stats.drawings = ESP.stats.drawings + 5
+end
+
+local function espHide(o)
+	if o.box.Visible then o.box.Visible = false end
+	if o.name.Visible then o.name.Visible = false end
+	if o.dist.Visible then o.dist.Visible = false end
+	if o.hpBg.Visible then o.hpBg.Visible = false end
+	if o.hpFg.Visible then o.hpFg.Visible = false end
+end
+
+local function espRemoveForPlayer(p)
+	local o = ESP.objects[p]
+	if not o then return end
+	pcall(function() o.box:Remove() end)
+	pcall(function() o.name:Remove() end)
+	pcall(function() o.dist:Remove() end)
+	pcall(function() o.hpBg:Remove() end)
+	pcall(function() o.hpFg:Remove() end)
+	ESP.objects[p] = nil
+	ESP.stats.drawings = math.max(0, ESP.stats.drawings - 5)
+end
+
+local function sameTeamFor(p)
+	if not S.teamChk then return false end
+	if not p.Team or not LP.Team then return false end
+	return p.Team == LP.Team
+end
+
+local function espTick()
+	if not ESP.enabled or shutdown then return end
+	if not COMPAT.drawing then return end
+
+	local col = Color3.fromRGB(S.espCol[1], S.espCol[2], S.espCol[3])
+	local camPos = Camera.CFrame.Position
+	local count = 0
+
+	for p in pairs(ESP.objects) do
+		local ch = p.Character
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		local o = ESP.objects[p]
+
+		if not ch or not hrp or not hum or hum.Health <= 0 or (S.espTeam and sameTeamFor(p)) then
+			espHide(o)
+			continue
+		end
+
+		local sp, on = Camera:WorldToViewportPoint(hrp.Position)
+		if not on then
+			espHide(o)
+			continue
+		end
+
+		local headSp = Camera:WorldToViewportPoint(hrp.Position + Vector3.new(0, 1.5, 0))
+		local feetSp = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+		local h = math.abs(feetSp.Y - headSp.Y)
+		local w = h * 0.5
+		local bx = sp.X - w / 2
+		local by = headSp.Y
+
+		if S.espBox then
+			o.box.Size = Vector2.new(w, h)
+			o.box.Position = Vector2.new(bx, by)
+			o.box.Color = col
+			o.box.Visible = true
+		elseif o.box.Visible then
+			o.box.Visible = false
+		end
+
+		if S.espName then
+			o.name.Text = p.Name
+			o.name.Position = Vector2.new(sp.X, headSp.Y - 16)
+			o.name.Color = col
+			o.name.Visible = true
+		elseif o.name.Visible then
+			o.name.Visible = false
+		end
+
+		if S.espDist then
+			o.dist.Text = math.floor((camPos - hrp.Position).Magnitude) .. "m"
+			o.dist.Position = Vector2.new(sp.X, feetSp.Y + 3)
+			o.dist.Color = col
+			o.dist.Visible = true
+		elseif o.dist.Visible then
+			o.dist.Visible = false
+		end
+
+		if S.espHp then
+			local hp = hum.Health / math.max(hum.MaxHealth, 1)
+			o.hpBg.Size = Vector2.new(3, h)
+			o.hpBg.Position = Vector2.new(bx - 6, by)
+			o.hpBg.Color = Color3.fromRGB(20, 20, 20)
+			o.hpBg.Visible = true
+			o.hpFg.Size = Vector2.new(3, h * hp)
+			o.hpFg.Position = Vector2.new(bx - 6, by + h * (1 - hp))
+			o.hpFg.Color = Color3.fromRGB(255 * (1 - hp), 255 * hp, 0)
+			o.hpFg.Visible = true
+		else
+			if o.hpBg.Visible then o.hpBg.Visible = false end
+			if o.hpFg.Visible then o.hpFg.Visible = false end
+		end
+
+		count = count + 1
+	end
+	ESP.stats.players = count
+end
+
+local function espStart()
+	if ESP.enabled or not COMPAT.drawing then return end
+	ESP.enabled = true
+	ESP.acc = 0
+	-- Lazy: create drawings only now.
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP then espCreateForPlayer(p) end
+	end
+	-- Single Heartbeat, throttled.
+	ESP.conn = RunService.Heartbeat:Connect(function(dt)
+		if not ESP.enabled then return end
+		ESP.acc = ESP.acc + dt
+		local rate = S.espInterval > 0 and S.espInterval or MODES[deviceMode + 1].espRate
+		if ESP.acc < rate then return end
+		ESP.acc = 0
+		local ok, e = pcall(espTick)
+		if not ok then
+			err("espTick", e)
+			espStop()  -- fail-safe: stop on error
+		end
+	end)
+end
+
+local function espStop()
+	if not ESP.enabled then return end
+	ESP.enabled = false
+	if ESP.conn then
+		pcall(function() ESP.conn:Disconnect() end)
+		ESP.conn = nil
+	end
+	-- Hide only — drawings kept cached for next enable (memory small).
+	for _, o in pairs(ESP.objects) do espHide(o) end
+	ESP.stats.players = 0
+end
+
+local function espFullCleanup()
+	espStop()
+	for p in pairs(ESP.objects) do espRemoveForPlayer(p) end
+	ESP.objects = {}
+	ESP.stats.drawings = 0
+end
+
+-- Player lifecycle hooks (always active, cheap).
+Players.PlayerAdded:Connect(function(p)
+	if p == LP then return end
+	if ESP.enabled then espCreateForPlayer(p) end
+end)
+Players.PlayerRemoving:Connect(function(p)
+	espRemoveForPlayer(p)
+end)
+
+-- Stop ESP when local player leaves / UI closes.
+LP.AncestryChanged:Connect(function()
+	if not LP:IsDescendantOf(game) then
+		espStop()
+	end
+end)
+
+-- ============================================================
+-- UI BUILD
 -- ============================================================
 local function buildUI()
 	local GUI = Instance.new("ScreenGui")
@@ -154,7 +366,6 @@ local function buildUI()
 	GUI.DisplayOrder = 999
 	GUI.Parent = (gethui and gethui()) or CoreGui
 
-	-- Float button.
 	local FB = Instance.new("TextButton")
 	FB.Size = UDim2.fromOffset(54, 54)
 	FB.Position = UDim2.new(0, 16, 0.5, -27)
@@ -170,7 +381,6 @@ local function buildUI()
 		local s = Instance.new("UIStroke"); s.Color = GOLD; s.Thickness = 2; s.Transparency = 0.2; s.Parent = FB
 	end
 
-	-- Main.
 	local M = Instance.new("Frame")
 	M.Size = UDim2.fromOffset(340, 470)
 	M.Position = UDim2.new(0.5, -170, 0.5, -235)
@@ -184,7 +394,6 @@ local function buildUI()
 		local s = Instance.new("UIStroke"); s.Color = GOLD_D; s.Thickness = 1.5; s.Parent = M
 	end
 
-	-- Title.
 	local TB = Instance.new("Frame")
 	TB.Size = UDim2.new(1, 0, 0, 48)
 	TB.BackgroundColor3 = Color3.fromRGB(18, 15, 9)
@@ -224,7 +433,6 @@ local function buildUI()
 	CL.Parent = TB
 	do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = CL end
 
-	-- Tabs.
 	local TBAR = Instance.new("Frame")
 	TBAR.Size = UDim2.new(1, 0, 0, 36)
 	TBAR.Position = UDim2.fromOffset(0, 48)
@@ -447,7 +655,7 @@ local function buildUI()
 		return r
 	end
 
-	-- AIM.
+	-- AIM tab.
 	toggle(pAim, "Aim Assist", S.aim, function(v) S.aim = v end)
 	cycle(pAim, "Target", {"Head", "Body"}, S.targetHead and "Head" or "Body", function(v) S.targetHead = (v == "Head") end)
 	toggle(pAim, "Team Check", S.teamChk, function(v) S.teamChk = v end)
@@ -458,15 +666,33 @@ local function buildUI()
 	toggle(pAim, "FOV Circle", S.fovOn, function(v) S.fovOn = v end)
 	slider(pAim, "FOV Size", 50, 400, S.fovSize, 0, function(v) S.fovSize = v end)
 
-	-- ESP.
-	toggle(pEsp, "Player ESP", S.esp, function(v) S.esp = v end)
+	-- ESP tab.
+	toggle(pEsp, "Player ESP", S.esp, function(v)
+		S.esp = v
+		if v then espStart() else espStop() end
+	end)
 	toggle(pEsp, "Box", S.espBox, function(v) S.espBox = v end)
 	toggle(pEsp, "Name", S.espName, function(v) S.espName = v end)
 	toggle(pEsp, "Health", S.espHp, function(v) S.espHp = v end)
 	toggle(pEsp, "Distance", S.espDist, function(v) S.espDist = v end)
 	toggle(pEsp, "Team Check", S.espTeam, function(v) S.espTeam = v end)
 
-	-- FPS.
+	-- ESP performance info.
+	local espInfo = Instance.new("TextLabel")
+	espInfo.Size = UDim2.new(1, 0, 0, 42)
+	espInfo.BackgroundColor3 = Color3.fromRGB(20, 17, 10)
+	espInfo.Text = "ESP: idle"
+	espInfo.TextColor3 = Color3.fromRGB(235, 220, 180)
+	espInfo.Font = Enum.Font.Gotham
+	espInfo.TextSize = 11
+	espInfo.TextXAlignment = Enum.TextXAlignment.Left
+	espInfo.Parent = pEsp
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 7); c.Parent = espInfo
+		local p = Instance.new("UIPadding"); p.PaddingLeft = UDim.new(0, 12); p.Parent = espInfo
+	end
+
+	-- FPS tab.
 	toggle(pFps, "FPS Boost", S.fpsOn, function(v)
 		S.fpsOn = v
 		Lighting.GlobalShadows = not v
@@ -487,7 +713,7 @@ local function buildUI()
 	fpsLbl.Parent = pFps
 	do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 7); c.Parent = fpsLbl end
 
-	-- OPT (device modes).
+	-- OPT tab.
 	local modeBtns = {}
 	local function applyMode(idx)
 		deviceMode = idx
@@ -515,6 +741,15 @@ local function buildUI()
 		b.MouseButton1Click:Connect(function() applyMode(i - 1) end)
 	end
 
+	-- Adjustable ESP interval (0 = auto).
+	cycle(pSet, "ESP Interval",
+		{"Auto", "0.05s", "0.10s", "0.20s", "0.30s", "0.50s"},
+		S.espInterval == 0 and "Auto" or string.format("%.2fs", S.espInterval),
+		function(v)
+			if v == "Auto" then S.espInterval = 0
+			else S.espInterval = tonumber(v:match("([%d%.]+)")) or 0 end
+		end)
+
 	local saveBtn = Instance.new("TextButton")
 	saveBtn.Size = UDim2.new(1, 0, 0, 36)
 	saveBtn.BackgroundColor3 = GOLD_D
@@ -527,7 +762,26 @@ local function buildUI()
 	do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 7); c.Parent = saveBtn end
 	saveBtn.MouseButton1Click:Connect(saveNow)
 
-	-- Drag (unified, throttled via InputChanged).
+	-- Compatibility info.
+	local compatLbl = Instance.new("TextLabel")
+	compatLbl.Size = UDim2.new(1, 0, 0, 48)
+	compatLbl.BackgroundColor3 = Color3.fromRGB(20, 17, 10)
+	local missing = {}
+	for k, v in pairs(COMPAT) do
+		if not v then table.insert(missing, k) end
+	end
+	compatLbl.Text = "Compat: " .. (#missing == 0 and "OK" or ("Missing " .. table.concat(missing, ",")))
+	compatLbl.TextColor3 = (#missing == 0) and GOLD_L or Color3.fromRGB(255, 130, 130)
+	compatLbl.Font = Enum.Font.Gotham
+	compatLbl.TextSize = 11
+	compatLbl.TextXAlignment = Enum.TextXAlignment.Left
+	compatLbl.Parent = pSet
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 7); c.Parent = compatLbl
+		local p = Instance.new("UIPadding"); p.PaddingLeft = UDim.new(0, 12); p.Parent = compatLbl
+	end
+
+	-- Drag.
 	local function makeDrag(obj, handle)
 		local dragging, ds, sp = false, nil, nil
 		handle.InputBegan:Connect(function(i)
@@ -549,7 +803,6 @@ local function buildUI()
 	end
 	makeDrag(M, TB)
 
-	-- Float drag/click.
 	do
 		local ds, sp, moved = nil, nil, false
 		FB.InputBegan:Connect(function(i)
@@ -576,13 +829,13 @@ local function buildUI()
 
 	CL.MouseButton1Click:Connect(function()
 		M.Visible = false
-		-- Automatic cleanup when UI closed.
+		-- Auto cleanup when UI closes.
 		S.aim = false
 		S.esp = false
 		S.aimming = false
+		espStop()
 	end)
 
-	-- AIM mobile button.
 	local AB = Instance.new("TextButton")
 	AB.Size = UDim2.fromOffset(76, 76)
 	AB.Position = UDim2.new(1, -100, 1, -180)
@@ -627,20 +880,21 @@ local function buildUI()
 		end)
 	end
 
-	return GUI, M, AB, fpsLbl, TB
+	return GUI, M, AB, fpsLbl, TB, espInfo
 end
 
 -- ============================================================
 -- LAUNCH
 -- ============================================================
-local GUI, M, AB, fpsLbl, TB = buildUI()
+requireCompat()
+local GUI, M, AB, fpsLbl, TB, espInfo = buildUI()
 LBF.Size = UDim2.new(0.7, 0, 1, 0)
 LS.Text = "Almost ready..."
 task.wait(0.1)
 pcall(function() LG:Destroy() end)
 
 -- ============================================================
--- DRAWINGS (reused, minimized)
+-- FOV (independent of ESP, own light path)
 -- ============================================================
 local fov = Drawing.new("Circle")
 fov.Thickness = 1
@@ -650,85 +904,10 @@ fov.Filled = false
 fov.NumSides = MODES[deviceMode + 1].fovSides
 fov.Visible = false
 
-local ESPCache = {}
-local function newESP()
-	local o = {
-		box = Drawing.new("Square"),
-		name = Drawing.new("Text"),
-		dist = Drawing.new("Text"),
-		hpBg = Drawing.new("Square"),
-		hpFg = Drawing.new("Square"),
-	}
-	o.box.Thickness = 1
-	o.name.Size = 13; o.name.Center = true; o.name.Outline = true; o.name.Font = Drawing.Fonts.Plex
-	o.dist.Size = 11; o.dist.Center = true; o.dist.Outline = true; o.dist.Font = Drawing.Fonts.Plex
-	o.hpBg.Filled = true; o.hpFg.Filled = true
-	return o
-end
-local function delESP(o)
-	pcall(function() o.box:Remove() end)
-	pcall(function() o.name:Remove() end)
-	pcall(function() o.dist:Remove() end)
-	pcall(function() o.hpBg:Remove() end)
-	pcall(function() o.hpFg:Remove() end)
-end
-
-local function setup(p) ESPCache[p] = newESP() end
-for _, p in ipairs(Players:GetPlayers()) do setup(p) end
-Players.PlayerAdded:Connect(setup)
-Players.PlayerRemoving:Connect(function(p)
-	local o = ESPCache[p]
-	if o then delESP(o); ESPCache[p] = nil end
-end)
-
 -- ============================================================
--- HELPERS
+-- AIM + FOV (RenderStepped, no-op when off)
 -- ============================================================
-local function sameTeam(p)
-	if not S.teamChk then return false end
-	if not p.Team or not LP.Team then return false end
-	return p.Team == LP.Team
-end
-
-local function vis(part)
-	if not S.visChk then return true end
-	local prm = RaycastParams.new()
-	prm.FilterType = Enum.RaycastFilterType.Exclude
-	prm.FilterDescendantsInstances = { LP.Character, part.Parent }
-	return workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, prm) == nil
-end
-
-local function getTarget()
-	local org = IS_MOBILE and Camera.ViewportSize / 2
-		or Vector2.new(UIS:GetMouseLocation().X, UIS:GetMouseLocation().Y)
-	local best, bestD = nil, math.huge
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p == LP then continue end
-		if sameTeam(p) then continue end
-		local ch = p.Character
-		if not ch then continue end
-		local part = S.targetHead and ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart")
-		local hum = ch:FindFirstChildOfClass("Humanoid")
-		if not (part and hum and hum.Health > 0) then continue end
-		if (Camera.CFrame.Position - part.Position).Magnitude > S.aimDist then continue end
-		local sp, on = Camera:WorldToViewportPoint(part.Position)
-		if not on then continue end
-		local sd = (Vector2.new(sp.X, sp.Y) - org).Magnitude
-		if sd <= S.fovSize and sd < bestD and vis(part) then
-			best, bestD = part, sd
-		end
-	end
-	return best
-end
-
--- ============================================================
--- THROTTLED UPDATE (independent of RenderStepped)
--- ============================================================
-local acc, fpsAcc, fpsCount, curFps = 0, 0, 0, 0
-local lastPingT = 0
-
--- AIM uses RenderStepped (needs per-frame lerp) but is a no-op when off.
-local aimConn = RunService.RenderStepped:Connect(function(dt)
+local aimConn = RunService.RenderStepped:Connect(function()
 	if shutdown then return end
 	if S.fovOn and S.aim then
 		fov.Position = Camera.ViewportSize / 2
@@ -739,23 +918,52 @@ local aimConn = RunService.RenderStepped:Connect(function(dt)
 	end
 
 	if S.aim and S.aimming then
-		local t = getTarget()
-		if t then
-			local des = CFrame.new(Camera.CFrame.Position, t.Position)
+		local org = IS_MOBILE and Camera.ViewportSize / 2
+			or Vector2.new(UIS:GetMouseLocation().X, UIS:GetMouseLocation().Y)
+		local best, bestD = nil, math.huge
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p == LP then continue end
+			if S.teamChk and p.Team and LP.Team and p.Team == LP.Team then continue end
+			local ch = p.Character
+			if not ch then continue end
+			local part = S.targetHead and ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart")
+			local hum = ch:FindFirstChildOfClass("Humanoid")
+			if not (part and hum and hum.Health > 0) then continue end
+			if (Camera.CFrame.Position - part.Position).Magnitude > S.aimDist then continue end
+			local sp, on = Camera:WorldToViewportPoint(part.Position)
+			if not on then continue end
+			local sd = (Vector2.new(sp.X, sp.Y) - org).Magnitude
+			if sd <= S.fovSize and sd < bestD then
+				if not S.visChk then
+					best, bestD = part, sd
+				else
+					local prm = RaycastParams.new()
+					prm.FilterType = Enum.RaycastFilterType.Exclude
+					prm.FilterDescendantsInstances = { LP.Character, part.Parent }
+					if workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, prm) == nil then
+						best, bestD = part, sd
+					end
+				end
+			end
+		end
+		if best then
+			local des = CFrame.new(Camera.CFrame.Position, best.Position)
 			local sf = 1 - math.clamp(S.smooth, 0.01, 1) + S.aimStr * 0.15
 			Camera.CFrame = Camera.CFrame:Lerp(des, math.clamp(sf, 0.02, 1))
 		end
 	end
 end)
 
--- ESP + FPS + save use Heartbeat with adaptive throttle.
-local espConn = RunService.Heartbeat:Connect(function(dt)
+-- ============================================================
+-- FPS MONITOR (1Hz, cheap) + ESP INFO
+-- ============================================================
+local fpsAcc, fpsCount, curFps, espInfoAcc = 0, 0, 0, 0
+local monConn = RunService.Heartbeat:Connect(function(dt)
 	if shutdown then return end
-	acc = acc + dt
 	fpsAcc = fpsAcc + dt
 	fpsCount = fpsCount + 1
+	espInfoAcc = espInfoAcc + dt
 
-	-- FPS counter (1Hz, no heavy reads).
 	if fpsAcc >= 1 then
 		curFps = fpsCount
 		fpsAcc, fpsCount = 0, 0
@@ -764,97 +972,20 @@ local espConn = RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 
-	-- ESP update throttled.
-	local rate = MODES[deviceMode + 1].espRate
-	if acc < rate then return end
-	acc = 0
-
-	if not S.esp then
-		-- Hide all once, cheap.
-		for _, o in pairs(ESPCache) do
-			if o.box.Visible then
-				o.box.Visible, o.name.Visible, o.dist.Visible = false, false, false
-				o.hpBg.Visible, o.hpFg.Visible = false, false
-			end
-		end
-		return
-	end
-
-	local col = Color3.fromRGB(S.espCol[1], S.espCol[2], S.espCol[3])
-	for p, o in pairs(ESPCache) do
-		local ch = p.Character
-		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-
-		if not ch or not hrp or not hum or hum.Health <= 0 or (S.espTeam and sameTeam(p)) then
-			if o.box.Visible then
-				o.box.Visible, o.name.Visible, o.dist.Visible = false, false, false
-				o.hpBg.Visible, o.hpFg.Visible = false, false
-			end
-			continue
-		end
-
-		local sp, on = Camera:WorldToViewportPoint(hrp.Position)
-		if not on then
-			if o.box.Visible then
-				o.box.Visible, o.name.Visible, o.dist.Visible = false, false, false
-				o.hpBg.Visible, o.hpFg.Visible = false, false
-			end
-			continue
-		end
-
-		local headSp = Camera:WorldToViewportPoint(hrp.Position + Vector3.new(0, 1.5, 0))
-		local feetSp = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
-		local h = math.abs(feetSp.Y - headSp.Y)
-		local w = h * 0.5
-		local bx = sp.X - w / 2
-		local by = headSp.Y
-
-		if S.espBox then
-			o.box.Size = Vector2.new(w, h)
-			o.box.Position = Vector2.new(bx, by)
-			o.box.Color = col
-			o.box.Visible = true
-		else
-			o.box.Visible = false
-		end
-
-		if S.espName then
-			o.name.Text = p.Name
-			o.name.Position = Vector2.new(sp.X, headSp.Y - 16)
-			o.name.Color = col
-			o.name.Visible = true
-		else
-			o.name.Visible = false
-		end
-
-		if S.espDist then
-			o.dist.Text = math.floor((Camera.CFrame.Position - hrp.Position).Magnitude) .. "m"
-			o.dist.Position = Vector2.new(sp.X, feetSp.Y + 3)
-			o.dist.Color = col
-			o.dist.Visible = true
-		else
-			o.dist.Visible = false
-		end
-
-		if S.espHp then
-			local hp = hum.Health / math.max(hum.MaxHealth, 1)
-			o.hpBg.Size = Vector2.new(3, h)
-			o.hpBg.Position = Vector2.new(bx - 6, by)
-			o.hpBg.Color = Color3.fromRGB(20, 20, 20)
-			o.hpBg.Visible = true
-			o.hpFg.Size = Vector2.new(3, h * hp)
-			o.hpFg.Position = Vector2.new(bx - 6, by + h * (1 - hp))
-			o.hpFg.Color = Color3.fromRGB(255 * (1 - hp), 255 * hp, 0)
-			o.hpFg.Visible = true
-		else
-			o.hpBg.Visible, o.hpFg.Visible = false, false
+	if espInfoAcc >= 1 then
+		espInfoAcc = 0
+		if espInfo then
+			local st = ESP.enabled and string.format(
+				"ESP: active\nTargets: %d | Drawings: %d",
+				ESP.stats.players, ESP.stats.drawings
+			) or "ESP: idle"
+			espInfo.Text = st
 		end
 	end
 end)
 
 -- ============================================================
--- SAVE LOOP (every 15s, cheap)
+-- SAVE LOOP
 -- ============================================================
 local saveConn = task.spawn(function()
 	while not shutdown do
@@ -864,25 +995,23 @@ local saveConn = task.spawn(function()
 end)
 
 -- ============================================================
--- CLEANUP (auto when UI hidden or re-executed)
+-- CLEANUP
 -- ============================================================
 local function cleanup()
 	if shutdown then return end
 	shutdown = true
 	pcall(function() aimConn:Disconnect() end)
-	pcall(function() espConn:Disconnect() end)
+	pcall(function() monConn:Disconnect() end)
+	espFullCleanup()
 	pcall(function() GUI:Destroy() end)
 	pcall(function() fov:Remove() end)
-	for p, o in pairs(ESPCache) do delESP(o); ESPCache[p] = nil end
 	pcall(saveNow)
 end
 shared[KEY] = cleanup
 
 if IS_MOBILE then
-	-- Auto cleanup when player leaves or game closes.
-	pcall(function()
-		game:BindToClose(cleanup)
-	end)
+	pcall(function() game:BindToClose(cleanup) end)
 end
 
-warn(("[ZENO HUB] Optimized v%s | %s | Mode: %s"):format(VER, OWNER, MODES[deviceMode + 1].name))
+warn(("[ZENO HUB] ESP Stability v%s | %s | Mode: %s | Drawing: %s")
+	:format(VER, OWNER, MODES[deviceMode + 1].name, tostring(COMPAT.drawing)))
